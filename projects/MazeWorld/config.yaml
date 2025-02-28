@@ -1,0 +1,135 @@
+---
+run_name: YOUR_NAME_TO_RUN
+master_port: "12402"
+load_model_path: [Path or None]
+
+log_config:
+  use_tensorboard: True
+  tensorboard_log: ./runs/
+  training_log: ./runs/train.log
+  evaluation_log: ./runs/eval.log
+
+model_config:
+  context_warmup: 1000
+  max_position_loss_weighting: 32000
+  vae_latent_size: 1024
+  action_dim: 16
+  policy_loss_type: CrossEntropy
+  image_encoder_block:
+      img_size: 128
+      hidden_size: 1024
+      n_res_block: 2
+
+  image_decoder_block:
+      input_size: 1024
+      hidden_size: 1024
+      img_size: 128
+      n_res_block: 2
+
+  decision_block:
+      state_encode:
+          input_type: Continuous
+          input_size: 1024
+          hidden_size: 1024
+          dropout: 0.0
+
+      action_encode:
+          input_type: Discrete
+          input_size: 17
+          hidden_size: 1024
+          dropout: 0.0
+
+      state_decode:
+          output_type: Continuous
+          input_size: 1024
+          hidden_size:
+              - 1024
+              - 1024
+          layer_norm: True
+          residual_connect: True
+          dropout: 0.0
+
+      action_decode:
+          output_type: Discrete
+          input_size: 1024
+          hidden_size:
+              - 1024
+              - 17
+          layer_norm: True
+          residual_connect: True
+          dropout: 0.0
+
+      causal_block:
+          model_type: TRANSFORMER
+          num_layers: 18
+          hidden_size: 1024
+          nhead: 32
+          inner_hidden_size: 1024
+          dropout: 0.10
+          context_window: -1
+          checkpoints_density: -1
+          position_encoding_size: 2048
+          use_layer_norm: True
+          use_blockrecurrence: True
+          memory_length: 1024
+          memory_type: KV
+              
+train_config:
+    max_epochs: 50
+    batch_size_vae: 4
+    batch_size_causal: 1
+    epoch_vae_stop: 2
+    epoch_causal_start: -1
+    manual_sync: True
+
+    seq_len_vae: 16000
+    seq_len_causal: 16000
+    seg_len_vae: 100
+    seg_len_causal: 500
+
+    lr_vae: 2.0e-4
+    lr_causal: 5.0e-4
+    lr_vae_decay_interval: 1000
+    lr_causal_decay_interval: 1000
+    lr_vae_start_step: 1000
+    lr_causal_start_step: 1000
+
+    data_path: [PATH]
+    save_model_path: "./checkpoints"
+    max_save_iterations: 1000
+
+    lossweight_policymodel: 0.01
+    lossweight_worldmodel_raw: 0.90
+    lossweight_worldmodel_latent: 0.09
+    lossweight_l2: 1.0e-6
+
+    use_amp: False
+    use_scaler: False
+
+    sigma_scheduler: 1000
+    sigma_value:
+        - 0.0
+        - 0.01
+        - 0.05
+        - 0.20
+
+    lambda_scheduler: 1000
+    lambda_value:
+        - 0.0
+        - 1.0e-8
+        - 1.0e-7
+        - 1.0e-6
+
+test_config:
+    batch_size_vae: 4
+    batch_size_causal: 4
+    data_path: [PATH]
+    epoch_vae_stop: 2
+    epoch_causal_start: -1
+
+    seq_len_vae: 16000
+    seq_len_causal: 16000
+    seg_len_vae: 500
+    seg_len_causal: 1000
+
+    output: ./results
