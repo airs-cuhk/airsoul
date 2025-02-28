@@ -309,8 +309,6 @@ class OmniRL(OPTARDecisionModel):
         
         return new_cache
 
-        
-
 if __name__=="__main__":
     from utils import Configure
     config=Configure()
