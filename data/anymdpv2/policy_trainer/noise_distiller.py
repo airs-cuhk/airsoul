@@ -4,27 +4,22 @@ class NoiseDistillerWrapper:
 
     def __init__(self, env, base_policy_data, max_steps=4000):
         self.env = env
-        
-        # 支持传入策略数据对象或直接状态字典
+
         if isinstance(base_policy_data, dict) and "state_dict" in base_policy_data:
             self.base_policy_data = base_policy_data
             self.base_policy_state_dict = base_policy_data["state_dict"]
         else:
-            # 向后兼容 - 如果直接传入状态字典
             self.base_policy_data = {"state_dict": base_policy_data}
             self.base_policy_state_dict = base_policy_data
         
-        # 保存重要的策略元数据
         self.policy_name = self.base_policy_data.get("policy_name", "unknown")
         self.policy_kwargs = self.base_policy_data.get("policy_kwargs", {})
         
-        # 如果是LSTM策略，确保保存特定配置
         if "ppo_lstm" in self.policy_name:
             self.lstm_hidden_size = self.base_policy_data.get("lstm_hidden_size", 32)
             self.n_lstm_layers = self.base_policy_data.get("n_lstm_layers", 2)
             self.enable_critic_lstm = self.base_policy_data.get("enable_critic_lstm", True)
         
-        # 噪声参数
         self.noise_upper = random.uniform(0.5, 0.9)
         self.noise_lower = random.uniform(0.1, 0.4)
         if self.noise_lower > self.noise_upper:
