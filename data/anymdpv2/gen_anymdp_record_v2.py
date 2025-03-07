@@ -25,7 +25,6 @@ class DataGenerator:
             random.seed(seed)
             np.random.seed(seed)
 
-        # 保存参数用于后续重初始化
         if mode is None:
             self.mode = random.choice(["static", "dynamic", "universal"])
         else:
@@ -35,7 +34,6 @@ class DataGenerator:
         self.ndim = ndim
         self.max_steps = max_steps
 
-        # 创建环境和任务
         self.env = gym.make("anymdp-v2-visualizer")
         self.task = AnyMDPv2TaskSampler(
             state_dim=state_dim,
@@ -47,17 +45,14 @@ class DataGenerator:
         )
         self.env.set_task(self.task)
 
-        # 设置可用的策略
         if policies_to_use is None:
             policies_to_use = ["sac", "ppo_mlp", "ppo_lstm"]
         self.policies_to_use = policies_to_use
 
-        # 初始化基础策略
         self.policies = {
             "random": lambda x: self.env.action_space.sample()
         }
-        
-        # 根据用户选择添加策略
+
         if "sac" in policies_to_use:
             self.policies["sac"] = SACTrainer(self.env, seed).model
             
@@ -66,8 +61,7 @@ class DataGenerator:
             
         if "ppo_lstm" in policies_to_use:
             self.policies["ppo_lstm"] = PPO_LSTM_Trainer(self.env, seed).model
-        
-        # 加载教练文件
+
         if os.path.isdir(coach_path):
             coach_dir = coach_path
         else:
@@ -94,7 +88,6 @@ class DataGenerator:
         self.reference_policies = data["reference_policies"]
         self.task_config = data["task_config"]
 
-        # 添加解析教练的环境信息和训练器配置
         self.env_info = data.get("env_info", {})
         self.trainer_configs = data.get("trainer_configs", {})
 
@@ -108,8 +101,7 @@ class DataGenerator:
 
         self.mask_all_tag_prob = 0.15
         self.mask_epoch_tag_prob = 0.15
-        
-        # 创建各阶段策略
+
         def create_stage_policy(stage_policies):
             def stage_policy(state, lstm_states=None):
                 policy_data = random.choice(stage_policies)
@@ -118,10 +110,8 @@ class DataGenerator:
                         
                 elif "noise_distilled_" in policy_data["policy_name"]:
                     base_policy_name = policy_data["policy_name"].replace("noise_distilled_", "")
-                    
-                    # 使用保存的policy_kwargs或默认值
+
                     if base_policy_name == "ppo_lstm":
-                        # 从policy_data或trainer_configs获取LSTM配置
                         lstm_hidden_size = policy_data.get("lstm_hidden_size", 32)
                         n_lstm_layers = policy_data.get("n_lstm_layers", 2)
                         enable_critic_lstm = policy_data.get("enable_critic_lstm", True)
@@ -170,7 +160,6 @@ class DataGenerator:
                         
                 else:
                     if policy_data["policy_name"] == "ppo_lstm":
-                        # 从policy_data或trainer_configs获取LSTM配置
                         lstm_hidden_size = policy_data.get("lstm_hidden_size", 32)
                         n_lstm_layers = policy_data.get("n_lstm_layers", 2)
                         enable_critic_lstm = policy_data.get("enable_critic_lstm", True)
@@ -214,10 +203,8 @@ class DataGenerator:
                             
             return stage_policy
 
-        # 定义各阶段及其策略
         self.stages = ["random", "early", "middle", "final", "finalnoisedistiller"]
         
-        # 创建行为策略字典和参考策略字典
         self.behavior_dict = [
             (create_stage_policy(self.behavior_policies["random"]), 0.10),
             (create_stage_policy(self.behavior_policies["early"]), 0.10),
@@ -230,7 +217,6 @@ class DataGenerator:
             (create_stage_policy([self.reference_policies["final"]]), 1.0)    
         ]
         
-        # 计算采样概率
         self.blist, bprob = zip(*self.behavior_dict)
         self.rlist, rprob = zip(*self.reference_dict)
         
