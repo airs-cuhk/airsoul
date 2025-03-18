@@ -109,7 +109,7 @@ class POTARDecisionModel(nn.Module):
         self.hidden_size = config.causal_block.hidden_size
 
         self.rsa_type = config.rsa_type
-        self.rsa_choice =  ["potar", "pota", "poa", "oar", "ota", "oa"]
+        self.rsa_choice =  ["potar", "pota", "poa", "oar", "ota", "oa", "otar"]
         self.rsa_occ = len(self.rsa_type)
 
         # Use prompt to predict the action, else use the observation
@@ -206,6 +206,9 @@ class POTARDecisionModel(nn.Module):
         """
         B = o_arr.shape[0]
         NT = o_arr.shape[1]
+
+        print(f"a_arr shape: {a_arr.shape if a_arr is not None else 'None'}")
+        print(f"o_arr shape: {o_arr.shape if o_arr is not None else 'None'}")
 
         assert a_arr.shape[:2] == o_arr.shape[:2]
 
