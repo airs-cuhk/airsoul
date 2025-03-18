@@ -33,14 +33,13 @@ class OmniRL(POTARDecisionModel):
         self.action_dtype = config.action_encode.input_type
 
         if(config.reward_encode.input_type == "Discrete"):
-            self.default_r = torch.full((1, 1), 0, dtype=torch.int64)  
+            torch.full(config.reward_encode.input_size, (1, 1), dtype=torch.int64)  
         elif(self.config.reward_encode.input_type == "Continuous"):
             self.default_r = torch.zeros((1, 1, config.reward_encode.input_size), dtype=torch.float32)
             print(f"debug - default_r type: {self.default_r.dtype if self.default_r is not None else 'None'}")
         else:
             raise ValueError("Invalid reward encoding type", config.reward_encoding)
             
-        
         if(config.action_encode.input_type == "Discrete"):
             self.default_a = torch.full((1, 1), config.action_encode.input_size, dtype=torch.int64)
         elif(config.action_encode.input_type == "Continuous"):
@@ -192,6 +191,16 @@ class OmniRL(POTARDecisionModel):
                 future_prediction=False):
         """
         Generating Step By Step Action and Next Frame Prediction
+        Args:
+            observation 
+            prompts: None if not included
+            tags: None if not included
+            temp: temperature for sampling
+            single_batch: if true, add additional batch to input tensor
+        Returns:
+            o_pred: predicted states, only valid if future_prediction is True
+            a_pred: predicted actions 
+            r_pred: predicted rewards, only valid if future_prediction is True
         """
         device = next(self.parameters()).device
 
