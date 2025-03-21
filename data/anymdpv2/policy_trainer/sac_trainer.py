@@ -1,13 +1,16 @@
 import numpy as np
+import torch
 import torch.nn as nn
 from stable_baselines3 import SAC
 from stable_baselines3.common.logger import configure
 import os
 
 class SACTrainer:
-    def __init__(self, env, seed=None):
+    def __init__(self, env, seed=None, device="auto"):
         self.env = env
         self.seed = seed
+        self.device = device
+        
         self.model = SAC(  
             "MlpPolicy",
             env,
@@ -19,6 +22,7 @@ class SACTrainer:
             learning_starts=100,
             train_freq=1,
             gradient_steps=1,
+            device=device,
             policy_kwargs=dict(
                 net_arch=dict(
                     pi=[256, 256],

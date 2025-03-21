@@ -9,7 +9,7 @@ from airsoul.utils import custom_load_model, noam_scheduler, LinearScheduler
 from airsoul.utils import Configure, DistStatistics, rewards2go, downsample
 from airsoul.utils import EpochManager, GeneratorBase, Logger
 from airsoul.utils import tag_vocabulary, tag_mapping_id, tag_mapping_gamma
-from airsoul.dataloader import AnyMDPDataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
+from airsoul.dataloader import AnyMDPDataSet, AnyMDPv2DataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
 import gymnasium 
 import gym
@@ -19,11 +19,13 @@ import pickle
 from pathlib import Path
 import random
 import re
-from online_rl_utils import DiscreteEnvWrapper, OnlineRL, AgentVisualizer, Switch2
+from airsoul.utils import AgentVisualizer
+from online_rl_utils import DiscreteEnvWrapper, OnlineRL, Switch2
 from gymnasium.envs.toy_text.frozen_lake import generate_random_map
 from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
 from l3c.anymdp.solver import get_final_transition, get_final_reward
+from l3c.anymdpv2.task_sampler import AnyMDPv2TaskSampler
 from stable_baselines3 import DQN, A2C, TD3, PPO
 
 
@@ -41,7 +43,7 @@ class OmniRLEpoch:
     def __init__(self, **kwargs):
         for key in kwargs:
             setattr(self, key, kwargs[key])
-        self.DataType=AnyMDPDataSet
+        self.DataType=AnyMDPv2DataSet #AnyMDPDataSet
         if(self.is_training):
             self.logger_keys = ["learning_rate", 
                         "loss_worldmodel_state", 
@@ -96,6 +98,7 @@ class OmniRLEpoch:
                     lactions, # Reference Actions
                     state_dropout=state_dropout, 
                     use_loss_weight=self.is_training,
+                    is_training=self.is_training,
                     reduce_dim=self.reduce) # Do not use loss weight for evaluation
             losses.append(loss)
             if(self.is_training):
@@ -175,6 +178,11 @@ class OmniRLEpoch:
 # use gamma_vocabulary and tag_vocabulary
 class OmniRLGenerator(GeneratorBase):
     def preprocess(self):
+        if hasattr(self.model, 'module'):
+            self.model_config = self.model.module.config
+        else:
+            self.model_config = self.model.config
+
         self.mult_anymdp_task = False
         if(self.config.env.lower().find("lake") >= 0):
             self.task_sampler = self.task_sampler_lake
@@ -230,12 +238,31 @@ class OmniRLGenerator(GeneratorBase):
         task_id = None
         if(self.tasks is None):
             dims = self.config.env.lower().replace("anymdp", "").split("x")
-            task = AnyMDPTaskSampler(int(dims[0]), int(dims[1]))
+            task = AnyMDPv2TaskSampler(int(dims[0]), int(dims[1]))
         else:
             task_num = len(self.tasks)
             task_id = (epoch_id * self.world_size + self.rank) % task_num
             task = self.tasks[task_id]
-        self.env.set_task(task)
+        
+        import gym
+        try:
+            self.env = gym.make('anymdp-v2-visualizer-v1', max_steps=self.max_steps)
+            print("Using env: anymdp-v2-visualizer-v1")
+        except:
+            try:
+                self.env = gym.make('anymdp-v2', max_steps=self.max_steps)
+                print("Using env: anymdp-v2")
+            except Exception as e:
+                print(f"Cannot create any env: {e}")
+                raise
+        
+        try:
+            self.env.set_task(task)
+        except Exception as e:
+            print(f"Error setting task: {e}")
+            print("Task:", list(task.keys()))
+            raise
+        
         return task_id
 
     def task_sampler_lake(self, epoch_id=0):
@@ -355,7 +382,10 @@ class OmniRLGenerator(GeneratorBase):
         elif self.config.env.lower().find("mountaincar") >= 0:
             state, *_ = self.env.reset(seed=123, options={"x_init": numpy.pi/2, "y_init": 0.5})
         else:
-            state, *_ = self.env.reset()
+            # state, *_ = self.env.reset()
+            state = self.env.reset()
+            if isinstance(state, tuple):
+                state, _ = state
         return state
 
     def check_task(self, oracle_reward_file, oracle_prompt_file, random_reward_file, random_prompt_file, threshold = 1.0):
@@ -549,45 +579,6 @@ class OmniRLGenerator(GeneratorBase):
         print("Finish Learning.")
 
     def benchmark(self, epoch_id):
-        supported_gym_env = ["lake", "lander", "mountaincar", "pendulum", "cliff"]
-        # Load opt model
-        if self.config.env.lower().find("anymdp") >= 0:
-            model = AnyMDPSolverOpt(self.env)
-            def benchmark_model(state):
-                return model.policy(state)
-            self.benchmark_opt_model = benchmark_model
-        elif any(self.config.env.lower().find(name) == 0 for name in supported_gym_env):
-            if self.config.run_benchmark.run_opt:
-                model_classes = {'dqn': DQN, 'a24': A2C, 'td3': TD3, 'ppo': PPO}
-                model_name = self.config.benchmark_model_name.lower()
-                if model_name not in model_classes:
-                    raise ValueError("Unknown policy type: {}".format())
-                model = model_classes[model_name].load(f'{self.config.benchmark_model_save_path}/model/{model_name}.zip', env=self.env)
-                def benchmark_model(state):
-                    action, _ = model.predict(state)
-                    return int(action)
-                self.benchmark_opt_model = benchmark_model
-        else:
-            raise ValueError("Unsupported environment:", self.config.env)
-        
-        def run_online_rl():
-            online_rl = OnlineRL(env=self.env, 
-                                 env_name=self.config.env.lower(),
-                                 model_name=self.config.benchmark_model_name.lower(),
-                                 max_trails=self.config.max_trails,
-                                 max_steps=self.config.max_steps,
-                                 downsample_trail=self.config.downsample_trail)
-            rew_stat, step_trail, success_rate = online_rl()
-            ds_step_trail = downsample(step_trail, self.config.downsample_trail)
-            ds_rewards = downsample(rew_stat, self.config.downsample_trail)
-            ds_success = downsample(success_rate, self.config.downsample_trail)
-            self.stat_online.gather(self.device,
-                                step=ds_step_trail,
-                                reward=ds_rewards,
-                                success_rate=ds_success)
-
-
-        # Function to run opt model or random model
         def run_benchmark(benchmark_model, logger_benchmark, stat_benchmark, epoch_id):
             rew_stat = []
             success_rate = []
@@ -600,20 +591,161 @@ class OmniRLGenerator(GeneratorBase):
                 if not self.nomalize_anymdp_reward(epoch_id):
                     return
             
+            # Check if we should use continuous space space handling
+            continuous_space = hasattr(self.model_config, 'state_encode') and self.model_config.state_encode.input_type == "Continuous"
+            
+            # For continuous space environments, use coach policies if specified
+            if continuous_space and hasattr(self.config, 'coach_policy_path'):
+                try:
+                    with open(self.config.coach_policy_path, 'rb') as f:
+                        coach_data = pickle.load(f)
+                    
+                    # Get policy from specified stage (default to "final" if not specified)
+                    policy_stage = getattr(self.config, 'coach_policy_stage', 'final')
+                    print(f"Using policy from stage: {policy_stage}")
+                    
+                    # Get a policy from the specified stage
+                    if policy_stage in coach_data['behavior_policies']:
+                        policies = coach_data['behavior_policies'][policy_stage]
+                        if policies:
+                            # Choose a policy from this stage based on index or best reward
+                            policy_index = getattr(self.config, 'coach_policy_index', -1)
+                            if policy_index >= 0 and policy_index < len(policies):
+                                ref_policy = policies[policy_index]
+                                print(f"Using specified policy #{policy_index} from stage {policy_stage}")
+                            else:
+                                # Choose the best policy based on average return
+                                best_idx = max(range(len(policies)), 
+                                            key=lambda i: policies[i].get('avg_return', 0) if 'avg_return' in policies[i] else 0)
+                                ref_policy = policies[best_idx]
+                                print(f"Using best policy #{best_idx} from stage {policy_stage} (avg_return: {ref_policy.get('avg_return', 'N/A')})")
+                        else:
+                            print(f"No policies found in stage {policy_stage}")
+                            ref_policy = None
+                    else:
+                        print(f"Stage {policy_stage} not found in coach data")
+                        ref_policy = None
+                    
+                    # Create and use the policy if we found one
+                    if ref_policy:
+                        policy_name = ref_policy['policy_name']
+                        print(f"Loaded policy type: {policy_name}")
+                        
+                        if policy_name == "ppo_lstm":
+                            from sb3_contrib import RecurrentPPO
+                            policy_kwargs = {
+                                "lstm_hidden_size": ref_policy.get('lstm_hidden_size', 32),
+                                "n_lstm_layers": ref_policy.get('n_lstm_layers', 2),
+                                "enable_critic_lstm": ref_policy.get('enable_critic_lstm', True)
+                            }
+                            
+                            model = RecurrentPPO("MlpLstmPolicy", self.env, verbose=0, policy_kwargs=policy_kwargs)
+                            model.policy.load_state_dict(ref_policy['state_dict'])
+                            
+                            # Use LSTM policy
+                            self.lstm_states = None
+                            def lstm_model(state):
+                                nonlocal self
+                                # Ensure state is proper format
+                                if isinstance(state, list):
+                                    state = numpy.array(state, dtype=numpy.float32)
+                                elif isinstance(state, numpy.ndarray):
+                                    state = state.astype(numpy.float32)
+                                    
+                                action, self.lstm_states = model.predict(
+                                    state, 
+                                    state=self.lstm_states,  
+                                    deterministic=True
+                                )
+                                return action
+                            
+                            benchmark_model = lstm_model
+                            
+                        elif policy_name == "ppo_mlp":
+                            from stable_baselines3 import PPO
+                            policy_kwargs = ref_policy.get('policy_kwargs', {})
+                            model = PPO("MlpPolicy", self.env, verbose=0, policy_kwargs=policy_kwargs)
+                            model.policy.load_state_dict(ref_policy['state_dict'])
+                            
+                            def mlp_model(state):
+                                if isinstance(state, list):
+                                    state = numpy.array(state, dtype=numpy.float32)
+                                elif isinstance(state, numpy.ndarray):
+                                    state = state.astype(numpy.float32)
+                                    
+                                action, _ = model.predict(state, deterministic=True)
+                                return action
+                            
+                            benchmark_model = mlp_model
+                            
+                        elif policy_name == "sac":
+                            from stable_baselines3 import SAC
+                            policy_kwargs = ref_policy.get('policy_kwargs', {})
+                            model = SAC("MlpPolicy", self.env, verbose=0, policy_kwargs=policy_kwargs)
+                            model.policy.load_state_dict(ref_policy['state_dict'])
+                            
+                            def sac_model(state):
+                                if isinstance(state, list):
+                                    state = numpy.array(state, dtype=numpy.float32)
+                                elif isinstance(state, numpy.ndarray):
+                                    state = state.astype(numpy.float32)
+                                    
+                                action, _ = model.predict(state, deterministic=True)
+                                return action
+                            
+                            benchmark_model = sac_model
+                        
+                        elif policy_name == "random":
+                            def random_model(state):
+                                return self.env.action_space.sample()
+                            
+                            benchmark_model = random_model
+                        
+                        print(f"Successfully loaded coach policy from stage {policy_stage}")
+                    
+                except Exception as e:
+                    print(f"Error loading coach policy: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            # Now run the benchmark with the selected model
             while trail < self.max_trails:
                 step = 0
                 trail_reward = 0.0
                 done = False
                 new_state = self.reset_env()
                 
+                # Preprocess state for continuous environments
+                if continuous_space:
+                    if isinstance(new_state, list):
+                        new_state = numpy.array(new_state, dtype=numpy.float32)
+                    elif isinstance(new_state, numpy.ndarray):
+                        new_state = new_state.astype(numpy.float32)
+                
                 while not done:
-                    action= benchmark_model(new_state)
+                    # Get action from the model
+                    action = benchmark_model(new_state)
+                    
+                    # Convert to int if needed for discrete action spaces
+                    if hasattr(self.env.action_space, 'n'):  # Discrete action space
+                        action = int(action) if not isinstance(action, int) else action
+                    
+                    # Take step in environment
                     new_state, new_reward, terminated, truncated, *_ = self.env.step(action)
+                    
+                    # Preprocess next state for continuous environments
+                    if continuous_space:
+                        if isinstance(new_state, list):
+                            new_state = numpy.array(new_state, dtype=numpy.float32)
+                        elif isinstance(new_state, numpy.ndarray):
+                            new_state = new_state.astype(numpy.float32)
+                    
                     if self.config.env.lower().find("anymdp") >= 0:
                         done = terminated
                     else:
                         if terminated or truncated:
                             done = True
+                            
                     shaped_reward = self.reward_shaping(done, terminated, new_reward)
                     trail_reward += new_reward
 
@@ -622,7 +754,7 @@ class OmniRLGenerator(GeneratorBase):
                         print("Reach max_steps, break trail.")
                         done = True
                     if done:
-                        # success rate
+                        # Calculate success rate
                         succ_fail = self.is_success_fail(new_reward, trail_reward, terminated)
                         if trail + 1 < self.config.downsample_trail:
                             success_rate_f = (1-1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
@@ -653,6 +785,185 @@ class OmniRLGenerator(GeneratorBase):
                                 reward=ds_rewards,
                                 success_rate=ds_success)
         
+        def run_online_rl():
+            online_rl = OnlineRL(env=self.env, 
+                                 env_name=self.config.env.lower(),
+                                 model_name=self.config.benchmark_model_name.lower(),
+                                 max_trails=self.config.max_trails,
+                                 max_steps=self.config.max_steps,
+                                 downsample_trail=self.config.downsample_trail)
+            rew_stat, step_trail, success_rate = online_rl()
+            ds_step_trail = downsample(step_trail, self.config.downsample_trail)
+            ds_rewards = downsample(rew_stat, self.config.downsample_trail)
+            ds_success = downsample(success_rate, self.config.downsample_trail)
+            self.stat_online.gather(self.device,
+                                step=ds_step_trail,
+                                reward=ds_rewards,
+                                success_rate=ds_success)
+
+        def run_coach_online_rl():
+            """Run online SAC training for continuous environments"""
+            from stable_baselines3 import SAC
+            
+            rew_stat = []
+            step_trail = []
+            success_rate = []
+            success_rate_f = 0.0
+            
+            # Create and train a SAC model
+            model = SAC(
+                "MlpPolicy",
+                self.env,
+                verbose=0,
+                learning_starts=100,
+                train_freq=1,
+                gradient_steps=1,
+                learning_rate=3e-4,
+                buffer_size=int(1e5),
+                batch_size=256,
+                policy_kwargs=dict(
+                    net_arch=dict(
+                        pi=[256, 256],
+                        qf=[256, 256]
+                    )
+                )
+            )
+            
+            # Training loop
+            for trail in range(self.config.max_trails):
+                state = self.reset_env()
+                if isinstance(state, list):
+                    state = numpy.array(state, dtype=numpy.float32)
+                elif isinstance(state, numpy.ndarray):
+                    state = state.astype(numpy.float32)
+                    
+                done = False
+                step = 0
+                trail_reward = 0.0
+                
+                while not done and step < self.max_steps:
+                    # First use the model to get action
+                    action, _ = model.predict(state, deterministic=False)
+                    
+                    # Execute action
+                    next_state, reward, terminated, truncated, *_ = self.env.step(action)
+                    
+                    # Process next state
+                    if isinstance(next_state, list):
+                        next_state = numpy.array(next_state, dtype=numpy.float32)
+                    elif isinstance(next_state, numpy.ndarray):
+                        next_state = next_state.astype(numpy.float32)
+                    
+                    # Check if done
+                    if self.config.env.lower().find("anymdp") >= 0:
+                        done = terminated
+                    else:
+                        done = terminated or truncated
+                    
+                    # Add to replay buffer and train
+                    model.replay_buffer.add(state, next_state, action, reward, done, [{}])
+                    if model.replay_buffer.size() > model.batch_size:
+                        model.train(gradient_steps=1, batch_size=model.batch_size)
+                    
+                    trail_reward += reward
+                    state = next_state
+                    step += 1
+                
+                # Calculate success rate
+                succ_fail = self.is_success_fail(reward, trail_reward, terminated)
+                if trail + 1 < self.config.downsample_trail:
+                    success_rate_f = (1-1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
+                else:
+                    success_rate_f = (1-1/self.config.downsample_trail) * success_rate_f + succ_fail / self.config.downsample_trail
+                
+                if self.mult_anymdp_task:
+                    trail_reward = self.reward_nomalize_factor * trail_reward + self.reward_nomalize_constant
+                
+                rew_stat.append(trail_reward)
+                success_rate.append(success_rate_f)
+                step_trail.append(step)
+                
+                self.logger_benchmark(trail, (trail+1)*step, step_trail[-1], rew_stat[-1], success_rate[-1])
+            
+            # Process results
+            ds_step_trail = downsample(step_trail, self.config.downsample_trail)
+            ds_rewards = downsample(rew_stat, self.config.downsample_trail)
+            ds_success = downsample(success_rate, self.config.downsample_trail)
+            
+            self.stat_online.gather(self.device,
+                                step=ds_step_trail,
+                                reward=ds_rewards,
+                                success_rate=ds_success)
+            
+            return rew_stat, step_trail, success_rate
+        
+        if not hasattr(self, 'benchmark_opt_model'):
+            def default_benchmark_model(state):
+                if hasattr(self.env.action_space, 'n'):
+                    return random.randint(0, self.config.action_clip - 1)
+                else:  
+                    return self.env.action_space.sample()
+            self.benchmark_opt_model = default_benchmark_model
+
+        # Check if we're using continuous space space
+        continuous_space = hasattr(self.model_config, 'state_encode') and self.model_config.state_encode.input_type == "Continuous"
+        supported_gym_env = ["lake", "lander", "mountaincar", "pendulum", "cliff"]
+        
+        # Handle different benchmark types
+        if continuous_space:
+            # continuous spaces
+            print("Using continuous space handling for benchmark")
+            
+            if self.config.run_benchmark.run_opt:
+                # For opt benchmark with continuous spaces, we use the 'final' stage coach policy
+                print("Running optimal benchmark with coach policy (final stage)")
+                run_benchmark(self.benchmark_opt_model, self.logger_benchmark, self.stat_opt, epoch_id)
+                # def benchmark_model(state):
+                #     return self.env.action_space.sample()
+                # run_benchmark(benchmark_model, self.logger_benchmark, self.stat_opt, epoch_id)
+                
+            if self.config.run_benchmark.run_online:
+                print("Running online RL benchmark with SAC")
+                run_coach_online_rl()
+                
+            if self.config.run_benchmark.run_random:
+                print("Running random benchmark")
+                def random_model(state):
+                    return self.env.action_space.sample()
+                run_benchmark(random_model, self.logger_random, self.stat_random, epoch_id)
+        else:
+            # discrete spaces
+            if self.config.env.lower().find("anymdp") >= 0:
+                model = AnyMDPSolverOpt(self.env)
+                def benchmark_model(state):
+                    return model.policy(state)
+                self.benchmark_opt_model = benchmark_model
+            elif any(self.config.env.lower().find(name) == 0 for name in supported_gym_env):
+                if self.config.run_benchmark.run_opt:
+                    model_classes = {'dqn': DQN, 'a24': A2C, 'td3': TD3, 'ppo': PPO}
+                    model_name = self.config.benchmark_model_name.lower()
+                    if model_name not in model_classes:
+                        raise ValueError("Unknown policy type: {}".format())
+                    model = model_classes[model_name].load(f'{self.config.benchmark_model_save_path}/model/{model_name}.zip', env=self.env)
+                    def benchmark_model(state):
+                        action, _ = model.predict(state)
+                        return int(action)
+                    self.benchmark_opt_model = benchmark_model
+            else:
+                raise ValueError("Unsupported environment:", self.config.env)
+        
+        # Run the discrete state benchmarks
+        if self.config.run_benchmark.run_opt:
+            run_benchmark(self.benchmark_opt_model, self.logger_benchmark, self.stat_opt, epoch_id)
+        
+        if self.config.run_benchmark.run_online:
+            run_online_rl()
+
+        if self.config.run_benchmark.run_random:
+            def random_model(state):
+                return random.randint(0, self.config.action_clip - 1)
+            run_benchmark(random_model, self.logger_random, self.stat_random, epoch_id)
+
         if self.config.run_benchmark.run_opt:
             run_benchmark(self.benchmark_opt_model, self.logger_benchmark, self.stat_opt, epoch_id)
         
@@ -757,7 +1068,7 @@ class OmniRLGenerator(GeneratorBase):
         pred_state_dist = None
 
         interactive_prompt = numpy.array([3]) # opt3 with gamma 0.994
-        self.interactive_tag = numpy.array([7]) # Unknown, let model deside current policy quality 
+        self.interactive_tag = numpy.array([5]) # Unknown, let model deside current policy quality 
 
         if self.config.learn_from_data:
             self.in_context_learn_from_teacher(epoch_id)
@@ -767,21 +1078,25 @@ class OmniRLGenerator(GeneratorBase):
             done = False
             trail_reward = 0.0
             trail_reward_shaped = 0.0
-            trail_obs_loss = 0.0
+            trail_obs_loss = numpy.float32(0.0)
             trail_reward_loss = 0.0
             trail_state_arr = []
             trail_action_arr = []
             trail_reward_arr = []
 
             previous_state = self.reset_env()
+            if isinstance(previous_state, numpy.ndarray):
+                print(f"Initial state shape: {previous_state.shape}, dtype: {previous_state.dtype}, value: {previous_state}")
+            else:
+                print(f"Initial state type: {type(previous_state)}, value: {previous_state}")
             trail_state_arr.append(previous_state)
             obs_arr.append(previous_state)
-            if(pred_state_dist is not None):
-                trail_obs_loss += -numpy.log(pred_state_dist[int(previous_state)].item())
+            # if(pred_state_dist is not None):
+            #     trail_obs_loss += -numpy.log(pred_state_dist[int(previous_state)].item())
             temp = self._scheduler(total_step)
             while not done:
                 # Generate action, world model prediction
-                pred_state_dist, action, pred_reward = self.model.module.generate(
+                pred_state, action, pred_reward = self.model.module.generate(
                     previous_state,
                     interactive_prompt,
                     self.interactive_tag,
@@ -792,6 +1107,10 @@ class OmniRLGenerator(GeneratorBase):
                 env_action = action % self.config.action_clip 
                 # Interact with environment         
                 new_state, new_reward, terminated, truncated, *_ = self.env.step(env_action)
+                if isinstance(new_state, numpy.ndarray):
+                    print(f"State shape: {new_state.shape}, dtype: {new_state.dtype}, value: {new_state}")
+                else:
+                    print(f"State type: {type(new_state)}, value: {new_state}")
                 if self.config.env.lower().find("anymdp") >= 0:
                         done = terminated
                 else:
@@ -827,13 +1146,25 @@ class OmniRLGenerator(GeneratorBase):
                 obs_arr.append(new_state) 
                 previous_state = new_state
 
-                trail_obs_loss += -numpy.log(pred_state_dist[int(new_state)].item())
+                if step == 0 and (pred_state_dist is not None):
+                    # First step after reset doesn't need state prediction loss
+                    pass
+                else:
+                    if self.model_config.state_encode.input_type == "Continuous":
+                        # Use Mean Squared Error for continuous spaces
+                        error_value = numpy.sum((pred_state - new_state) ** 2)
+                        # Optionally normalize by the number of dimensions
+                        normalized_error = error_value / new_state.shape[0]
+                        trail_obs_loss += normalized_error
+                    else:
+                        trail_obs_loss += -numpy.log(pred_state_dist[int(new_state)].item())
                 trail_reward += new_reward
                 trail_reward_shaped += shaped_reward
                 trail_reward_loss += (shaped_reward - pred_reward) ** 2
 
-                step += 1
+                step += 1 + self.config.skip_frame
                 if(step > self.max_steps):
+                    step = self.max_steps
                     print("Reach max_steps, break trail.")
                     done = True
                 if(done):
@@ -860,8 +1191,8 @@ class OmniRLGenerator(GeneratorBase):
                         trail_reward = self.reward_nomalize_factor * trail_reward + self.reward_nomalize_constant
                     
                     rew_stat.append(trail_reward)
-                    state_error.append(trail_obs_loss / step)
-                    reward_error.append(trail_reward_loss / step)
+                    state_error.append(float(trail_obs_loss / step))
+                    reward_error.append(float(trail_obs_loss / step))
                     success_rate.append(success_rate_f)
                     step_trail.append(step)
 
@@ -965,6 +1296,7 @@ class OmniRLGenerator(GeneratorBase):
                                 random_results['success_rate']['mean'])
             self.save_results(random_results, "random_result")
 
+
 class MultiAgentGenerator(OmniRLGenerator):
 
     # Mult-Agent Generator
@@ -996,9 +1328,11 @@ class MultiAgentGenerator(OmniRLGenerator):
                     return abs(goal_pos[0]-pos[0]) + abs(goal_pos[1]-pos[1])
                 
                 if distance_to_goal(current_pos,goal_pos) < distance_to_goal(last_pos,goal_pos):
-                    rew = 0
+                    rew = 0.08
+                elif distance_to_goal(current_pos,goal_pos) > distance_to_goal(last_pos,goal_pos):
+                    rew = -0.12
                 else:
-                    rew = -0.005
+                    rew = -0.04
 
                 if not done[i]:
                     reward[i] = rew
@@ -1006,7 +1340,39 @@ class MultiAgentGenerator(OmniRLGenerator):
                     reward[i] = 1.0 if reward[i] > 0.0 else rew
                     
         return reward
-        
+    
+    def in_context_learn_from_teacher(self, epoch_id):
+        # Task ID: retrieve the correpsonding teacher trajectory with task ID
+        for agent_index in range(self.agent_num):
+            for folder in os.listdir(self.config.data_root):
+                folder_path = os.path.join(self.config.data_root, folder)
+
+                if os.path.isdir(folder_path):
+                    states = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_observations.npy'))
+                    prompts = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_prompts.npy'))
+                    tags = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_tags.npy'))
+                    actions = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_actions_behavior.npy'))
+                    rewards = numpy.load(os.path.join(folder_path, f'agent{agent_index+1}_rewards.npy'))
+                    states = states.astype(numpy.int32)
+                    prompts = prompts.astype(numpy.int32)
+                    tags = tags.astype(numpy.int32)
+                    actions = actions.astype(numpy.int32)
+                    rewards = rewards.astype(numpy.float32)
+                    segment_len = 1000
+                    for start in range(0, len(states), segment_len):
+                        end = min(start + segment_len, len(states))
+                        self.model[agent_index].module.in_context_learn(
+                            states[start:end],
+                            prompts[start:end],
+                            tags[start:end],
+                            actions[start:end],
+                            rewards[start:end],
+                            single_batch=True,
+                            single_step=False)
+                else:
+                    log_warn(f"Folder {folder_path} does not exist.")
+        print("Finish Learning.")
+
     def __call__(self, epoch_id):
 
         task_id = self.task_sampler(epoch_id=epoch_id)
@@ -1025,6 +1391,10 @@ class MultiAgentGenerator(OmniRLGenerator):
                 self.benchmark(epoch_id)
             else:
                 print("Run ICL Only.")
+
+        if self.config.learn_from_data:
+            self.in_context_learn_from_teacher(epoch_id)
+
         # Start ICL
         obs_arrs = [[] for _ in range(self.agent_num)]
         act_arrs = [[] for _ in range(self.agent_num)]
@@ -1044,7 +1414,7 @@ class MultiAgentGenerator(OmniRLGenerator):
         trail = 0
 
         interactive_prompt = numpy.array([3]) # opt3 with gamma 0.994
-        self.interactive_tag = numpy.array([7]) # Unknown, let model deside current policy quality 
+        self.interactive_tag = numpy.array([5]) # Unknown, let model deside current policy quality 
 
         #if self.config.learn_from_data:
         #    self.in_context_learn_from_teacher(epoch_id)
@@ -1094,10 +1464,15 @@ class MultiAgentGenerator(OmniRLGenerator):
                 new_state, new_reward, done, *_ = self.env.step(env_action)
                 # Reward shaping
                 shaped_reward = self.reward_shaping(done, new_reward, previous_state, new_state)
+                if not agents_info[0]['stop_learning'] and not agents_info[1]['stop_learning']:
+                    sum_reward = sum(shaped_reward)
+                    shaped_reward[0] = sum_reward
+                    shaped_reward[1] = sum_reward
+
                 # Collect gif frame
                 if self.config.save_gif and trail % self.config.save_gif_gap == 0: 
                     if self.config.env.lower().find("anymdp") < 0:
-                        frames.extend(self.env.render())
+                        frames.append(self.env.render(mode='rgb_array'))
 
                 for agent_index in range(self.agent_num):
                     agents_info[agent_index]['done'] = done[agent_index]

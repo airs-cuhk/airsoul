@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, VecTransposeImage
@@ -11,9 +12,11 @@ class CustomCallback(BaseCallback):
         return True
 
 class PPO_MLP_Trainer:
-    def __init__(self, env, seed=None):
+    def __init__(self, env, seed=None, device="auto"):
         self.env = env
         self.seed = seed
+        self.device = device
+        
         self.model = PPO(
             "MlpPolicy",      
             self.env,
@@ -21,9 +24,9 @@ class PPO_MLP_Trainer:
             learning_rate=3e-4,
             batch_size=64,
             gamma=0.99,
-            seed=seed
+            seed=seed,
+            device=device
         )
-        
         
     def preprocess_state(self, state):
         if isinstance(state, np.ndarray):

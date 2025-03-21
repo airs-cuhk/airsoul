@@ -503,7 +503,7 @@ if __name__ == "__main__":
     parser.add_argument("--mode", type=str, required=False, choices=["static", "dynamic", "universal"], help="Mode for task sampler.")
     parser.add_argument("--state_dim", type=int, default=256, help="state dimension")
     parser.add_argument("--action_dim", type=int, default=256, help="action dimension")
-    parser.add_argument("--ndim", type=int, default=8, help="ndim for task sampler")
+    parser.add_argument("--task_ndim", type=int, default=None, help="ndim for task sampler (default: random between 8-32)")
     parser.add_argument("--max_steps", type=int, default=4000, help="maximum steps per epoch")
     parser.add_argument("--max_episodes", type=int, default=20, help="maximum episodes per epoch")
     parser.add_argument("--n_epochs", type=int, default=10, help="number of epochs")
@@ -532,10 +532,12 @@ if __name__ == "__main__":
             attempt += 1
             print(f"Attempt {attempt} for mode {mode}")
             
-            env = gym.make("anymdp-v2-visualizer")
+            env = gym.make("anymdp-v2-visualizer-v1")
             task = AnyMDPv2TaskSampler(
                 state_dim=args.state_dim,
                 action_dim=args.action_dim,
+                ndim=args.task_ndim,
+                mode=args.mode,
                 seed=args.seed
             )
             env.set_task(task)

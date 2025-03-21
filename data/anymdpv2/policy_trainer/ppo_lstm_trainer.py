@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv
@@ -11,9 +12,11 @@ class CustomCallback(BaseCallback):
         return True
 
 class PPO_LSTM_Trainer:
-    def __init__(self, env, seed=None):
+    def __init__(self, env, seed=None, device="auto"):
         self.env = env
         self.seed = seed
+        self.device = device
+        
         self.model = RecurrentPPO(
             "MlpLstmPolicy",      
             self.env,
@@ -31,6 +34,7 @@ class PPO_LSTM_Trainer:
             },
             clip_range=0.2,
             seed=seed,
+            device=device,
         )
         
     def preprocess_state(self, state):

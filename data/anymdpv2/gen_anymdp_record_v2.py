@@ -14,18 +14,29 @@ import gym
 from policy_trainer.sac_trainer import SACTrainer
 from policy_trainer.ppo_mlp_trainer import PPO_MLP_Trainer
 from policy_trainer.ppo_lstm_trainer import PPO_LSTM_Trainer
+import gc
+import pickle
+import io
+import torch
+
+# Force CPU usage
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+# Monkey patch torch.cuda.is_available
+if hasattr(torch, 'cuda') and hasattr(torch.cuda, 'is_available'):
+    torch.cuda.is_available = lambda: False
 
 def create_directory(path):
     os.makedirs(path, exist_ok=True)
 
 class DataGenerator:
-    def __init__(self, coach_path, mode, state_dim, action_dim, ndim, max_steps, seed=None, policies_to_use=None):
+    def __init__(self, coach_path, mode, state_dim, action_dim, ndim, max_steps, seed=None, policies_to_use=None, device="cpu"):
         self.seed = seed
+        self.device = device
         if seed is not None:
             random.seed(seed)
             np.random.seed(seed)
+            torch.manual_seed(seed)
 
-        # 保存参数用于后续重初始化
         if mode is None:
             self.mode = random.choice(["static", "dynamic", "universal"])
         else:
@@ -35,39 +46,37 @@ class DataGenerator:
         self.ndim = ndim
         self.max_steps = max_steps
 
-        # 创建环境和任务
-        self.env = gym.make("anymdp-v2-visualizer")
+        self.env = gym.make("anymdp-v2-visualizer-v1")
+        
+        task_ndim = self.ndim if self.ndim is not None else random.randint(8, 32)
+        
         self.task = AnyMDPv2TaskSampler(
             state_dim=state_dim,
             action_dim=action_dim, 
-            ndim=ndim,
+            ndim=task_ndim,
             mode=mode,
             seed=seed,
             verbose=False
         )
         self.env.set_task(self.task)
 
-        # 设置可用的策略
         if policies_to_use is None:
             policies_to_use = ["sac", "ppo_mlp", "ppo_lstm"]
         self.policies_to_use = policies_to_use
 
-        # 初始化基础策略
         self.policies = {
             "random": lambda x: self.env.action_space.sample()
         }
-        
-        # 根据用户选择添加策略
+
         if "sac" in policies_to_use:
-            self.policies["sac"] = SACTrainer(self.env, seed).model
+            self.policies["sac"] = SACTrainer(self.env, seed, device=self.device).model
             
         if "ppo_mlp" in policies_to_use:
-            self.policies["ppo_mlp"] = PPO_MLP_Trainer(self.env, seed).model
+            self.policies["ppo_mlp"] = PPO_MLP_Trainer(self.env, seed, device=self.device).model
             
         if "ppo_lstm" in policies_to_use:
-            self.policies["ppo_lstm"] = PPO_LSTM_Trainer(self.env, seed).model
-        
-        # 加载教练文件
+            self.policies["ppo_lstm"] = PPO_LSTM_Trainer(self.env, seed, device=self.device).model
+
         if os.path.isdir(coach_path):
             coach_dir = coach_path
         else:
@@ -94,7 +103,6 @@ class DataGenerator:
         self.reference_policies = data["reference_policies"]
         self.task_config = data["task_config"]
 
-        # 添加解析教练的环境信息和训练器配置
         self.env_info = data.get("env_info", {})
         self.trainer_configs = data.get("trainer_configs", {})
 
@@ -108,8 +116,7 @@ class DataGenerator:
 
         self.mask_all_tag_prob = 0.15
         self.mask_epoch_tag_prob = 0.15
-        
-        # 创建各阶段策略
+
         def create_stage_policy(stage_policies):
             def stage_policy(state, lstm_states=None):
                 policy_data = random.choice(stage_policies)
@@ -118,10 +125,8 @@ class DataGenerator:
                         
                 elif "noise_distilled_" in policy_data["policy_name"]:
                     base_policy_name = policy_data["policy_name"].replace("noise_distilled_", "")
-                    
-                    # 使用保存的policy_kwargs或默认值
+
                     if base_policy_name == "ppo_lstm":
-                        # 从policy_data或trainer_configs获取LSTM配置
                         lstm_hidden_size = policy_data.get("lstm_hidden_size", 32)
                         n_lstm_layers = policy_data.get("n_lstm_layers", 2)
                         enable_critic_lstm = policy_data.get("enable_critic_lstm", True)
@@ -136,19 +141,22 @@ class DataGenerator:
                             "MlpLstmPolicy",
                             self.env,
                             verbose=0,
-                            policy_kwargs=policy_kwargs
+                            policy_kwargs=policy_kwargs,
+                            device=self.device
                         )
                     elif base_policy_name == "ppo_mlp":
                         base_policy = PPO(
                             "MlpPolicy",
                             self.env,
-                            verbose=0
+                            verbose=0,
+                            device=self.device
                         )
                     else:  
                         base_policy = SAC(
                             "MlpPolicy",
                             self.env,
-                            verbose=0
+                            verbose=0,
+                            device=self.device
                         )
                     
                     try:
@@ -170,7 +178,6 @@ class DataGenerator:
                         
                 else:
                     if policy_data["policy_name"] == "ppo_lstm":
-                        # 从policy_data或trainer_configs获取LSTM配置
                         lstm_hidden_size = policy_data.get("lstm_hidden_size", 32)
                         n_lstm_layers = policy_data.get("n_lstm_layers", 2)
                         enable_critic_lstm = policy_data.get("enable_critic_lstm", True)
@@ -186,7 +193,8 @@ class DataGenerator:
                                 "MlpLstmPolicy",
                                 self.env,
                                 verbose=0,
-                                policy_kwargs=policy_kwargs
+                                policy_kwargs=policy_kwargs,
+                                device=self.device
                             )
                             policy.policy.load_state_dict(policy_data["state_dict"])
                             return policy.predict(state, state=lstm_states, deterministic=True)
@@ -198,7 +206,8 @@ class DataGenerator:
                         policy = PPO(
                             "MlpPolicy",
                             self.env,
-                            verbose=0
+                            verbose=0,
+                            device=self.device
                         )
                         policy.policy.load_state_dict(policy_data["state_dict"])
                         return policy.predict(state, deterministic=True)
@@ -207,17 +216,16 @@ class DataGenerator:
                         policy = SAC(
                             "MlpPolicy",
                             self.env,
-                            verbose=0
+                            verbose=0,
+                            device=self.device
                         )
                         policy.policy.load_state_dict(policy_data["state_dict"])
                         return policy.predict(state, deterministic=True)
                             
             return stage_policy
 
-        # 定义各阶段及其策略
         self.stages = ["random", "early", "middle", "final", "finalnoisedistiller"]
         
-        # 创建行为策略字典和参考策略字典
         self.behavior_dict = [
             (create_stage_policy(self.behavior_policies["random"]), 0.10),
             (create_stage_policy(self.behavior_policies["early"]), 0.10),
@@ -230,7 +238,6 @@ class DataGenerator:
             (create_stage_policy([self.reference_policies["final"]]), 1.0)    
         ]
         
-        # 计算采样概率
         self.blist, bprob = zip(*self.behavior_dict)
         self.rlist, rprob = zip(*self.reference_dict)
         
@@ -240,12 +247,24 @@ class DataGenerator:
         self.rprob /= self.rprob[-1]
     
     def reset_env_and_task(self):
+        if hasattr(self, 'env'):
+            self.env.close()
+            del self.env
+        if hasattr(self, 'task'):
+            del self.task
+
+        import gc
+        gc.collect()
         print("Reinitializing environment and task...")
-        self.env = gym.make("anymdp-v2-visualizer")
+        self.env = gym.make("anymdp-v2-visualizer-v1")
+        
+        task_ndim = self.ndim if self.ndim is not None else random.randint(8, 32)
+        print(f"Using ndim={task_ndim} for this task")
+    
         self.task = AnyMDPv2TaskSampler(
             state_dim=self.state_dim,
             action_dim=self.action_dim,
-            ndim=self.ndim,
+            ndim=task_ndim,
             mode=self.mode,
             seed=self.seed,
             verbose=False
@@ -260,6 +279,7 @@ class DataGenerator:
             learning_rate=3e-4,
             batch_size=64,
             gamma=0.99,
+            device=self.device
         )
     
     def load_policy(self, policy_data):
@@ -293,12 +313,13 @@ class DataGenerator:
                             "lstm_hidden_size": 32,
                             "n_lstm_layers": 2,
                             "enable_critic_lstm": True
-                        }
+                        },
+                        device=self.device
                     )
         elif policy_name == "ppo_mlp":
-            return PPO("MlpPolicy", self.env, verbose=0)
+            return PPO("MlpPolicy", self.env, verbose=0, device=self.device)
         else:  # sac
-            return SAC("MlpPolicy", self.env, verbose=0)
+            return SAC("MlpPolicy", self.env, verbose=0, device=self.device)
 
     def check_env_validity(self, num_steps=10):
         """
@@ -387,26 +408,28 @@ class DataGenerator:
     def sample_reference_policy(self):
         return self.rlist[np.searchsorted(self.rprob, random.random())]
     
-    def generate_data(self, epoch_id, max_steps):
-        # Validate environment before generating data
-        valid_env = False
-        max_attempts = 100
-        attempts = 0
-        
-        while not valid_env and attempts < max_attempts:
-            attempts += 1
-            print(f"Environment validation attempt {attempts}/{max_attempts}")
-            valid_env = self.check_env_validity(num_steps=10)
+    def generate_data(self, epoch_id, max_steps, skip_validation=False):
+        if not skip_validation:
+            valid_env = False
+            max_attempts = 100
+            attempts = 0
+            
+            while not valid_env and attempts < max_attempts:
+                attempts += 1
+                print(f"Environment validation attempt {attempts}/{max_attempts}")
+                valid_env = self.check_env_validity(num_steps=10)
+                if not valid_env:
+                    print("Invalid environment detected. Recreating environment and task...")
+                    self.reset_env_and_task()
+            
             if not valid_env:
-                print("Invalid environment detected. Recreating environment and task...")
-                self.reset_env_and_task()
-        
-        if not valid_env:
-            print(f"Failed to create a valid environment after {max_attempts} attempts. Aborting data generation.")
-            return None
-        
-        print("Valid environment confirmed. Proceeding with data generation...")
-        
+                print(f"Failed to create a valid environment after {max_attempts} attempts. Aborting data generation.")
+                return None
+            
+            print("Valid environment confirmed. Proceeding with data generation...")
+        else:
+            print("Skipping environment validation, generating data directly...")
+
         all_data = {
             "states": [],
             "actions_behavior": [],
@@ -560,19 +583,49 @@ class DataGenerator:
         
         return processed_data
 
-def dump_anymdp(path_name, coach_path, max_steps, epoch_range, mode, ndim, state_dim, action_dim, seed=None):
-    generator = DataGenerator(
-        coach_path=coach_path,
-        mode=mode,
-        state_dim=state_dim,
-        action_dim=action_dim,
-        ndim=ndim,
-        max_steps=max_steps,
-        seed=seed
-    )
+def dump_anymdp(path_name, coach_path, max_steps, epoch_range, mode, ndim, state_dim, action_dim, 
+                seed=None, task_source='NEW', task_file=None, device="cpu"):
     
-    for epoch_id in epoch_range:
-        results = generator.generate_data(epoch_id, max_steps)
+    # Load tasks from file if specified
+    tasks_from_file = None
+    if task_source == 'FILE' and task_file is not None:
+        print(f"Loading tasks from file: {task_file}")
+        try:
+            with open(task_file, 'rb') as fr:
+                tasks_from_file = pickle.load(fr)
+            print(f"Successfully loaded {len(tasks_from_file)} tasks from file")
+        except Exception as e:
+            print(f"Error loading tasks from file: {e}")
+            return
+    
+    for i, epoch_id in enumerate(epoch_range):
+        # Create a new generator for each epoch to avoid memory issues
+        generator = DataGenerator(
+            coach_path=coach_path,
+            mode=mode,
+            state_dim=state_dim,
+            action_dim=action_dim,
+            ndim=ndim,
+            max_steps=max_steps,
+            seed=seed if seed is None else seed + i,
+            device=device
+        )
+        
+        # If using tasks from file, set the task for this epoch
+        if tasks_from_file is not None:
+            task_id = epoch_id % len(tasks_from_file)
+            print(f"Using task {task_id} from file for epoch {epoch_id}")
+            generator.task = tasks_from_file[task_id]
+            generator.env.set_task(generator.task)
+        
+        # 根据任务来源决定是否跳过验证
+        skip_validation = (task_source == 'FILE')
+        
+        # 统一使用 generate_data 方法并传递 skip_validation 参数
+        if skip_validation:
+            print("Using pre-validated task from file, skipping validation...")
+        
+        results = generator.generate_data(epoch_id, max_steps, skip_validation=skip_validation)
         
         # Skip if data generation failed
         if results is None:
@@ -580,16 +633,38 @@ def dump_anymdp(path_name, coach_path, max_steps, epoch_range, mode, ndim, state
             continue
             
         file_path = f'{path_name}/record-{epoch_id:06d}'
-        create_directory(file_path)
-        
-        np.save(f"{file_path}/observations.npy", results["states"])
-        np.save(f"{file_path}/actions_behavior.npy", results["actions_behavior"])
-        np.save(f"{file_path}/actions_label.npy", results["actions_label"])
-        np.save(f"{file_path}/rewards.npy", results["rewards"])
-        np.save(f"{file_path}/prompts.npy", results["prompts"])
-        np.save(f"{file_path}/tags.npy", results["tags"])
+        try:
+            create_directory(file_path)
+            print(f"Saving data for epoch {epoch_id} to {file_path}")
+
+            np.save(f"{file_path}/observations.npy", results["states"])
+            np.save(f"{file_path}/actions_behavior.npy", results["actions_behavior"])
+            np.save(f"{file_path}/actions_label.npy", results["actions_label"])
+            np.save(f"{file_path}/rewards.npy", results["rewards"])
+            np.save(f"{file_path}/prompts.npy", results["prompts"])
+            np.save(f"{file_path}/tags.npy", results["tags"])
+            
+            print(f"Successfully saved all data for epoch {epoch_id}")
+            
+        except Exception as e:
+            print(f"Error saving data for epoch {epoch_id}: {e}")
+            
+        del results
+        del generator
+        gc.collect()
+
+def init_worker():
+    # 在每个worker进程启动时设置环境变量和torch设置
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    if hasattr(torch, 'cuda') and hasattr(torch.cuda, 'is_available'):
+        torch.cuda.is_available = lambda: False
 
 if __name__ == "__main__":
+    # 在主进程中设置环境变量，确保主进程下也使用CPU
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    if hasattr(torch, 'cuda') and hasattr(torch.cuda, 'is_available'):
+        torch.cuda.is_available = lambda: False
+    
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_path", type=str, default="./anymdp_data/", help="Output directory")
     parser.add_argument("--coach_path", type=str, required=True, help="Path to the trained coach")
@@ -601,38 +676,64 @@ if __name__ == "__main__":
     parser.add_argument("--mode", type=str, required=False, choices=["static", "dynamic", "universal"], help="Mode for task sampler")
     parser.add_argument("--state_dim", type=int, default=256, help="State dimension")
     parser.add_argument("--action_dim", type=int, default=256, help="Action dimension")
-    parser.add_argument("--ndim", type=int, default=8, help="ndim for task sampler")
+    parser.add_argument("--task_ndim", type=int, default=None, help="ndim for task sampler (default: random between 8-32)")
+    parser.add_argument("--batch_size", type=int, default=100, help="Batch size for each worker")
+    parser.add_argument("--task_source", type=str, choices=['FILE', 'NEW'], default='NEW', help="Choose task source to generate the trajectory. FILE: tasks sample from existing file; NEW: create new tasks")
+    parser.add_argument("--task_file", type=str, default=None, help="Task source file, used if task_source = FILE")
+    parser.add_argument("--cpu_only", action="store_true", help="Force CPU usage regardless of GPU availability")
     
     args = parser.parse_args()
 
-    worker_splits = args.epochs / args.workers + 1.0e-6
+    if args.task_source == 'FILE' and args.task_file is None:
+        raise ValueError("Must specify --task_file if task_source == FILE")
+
+    if args.cpu_only:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        if hasattr(torch, 'cuda') and hasattr(torch.cuda, 'is_available'):
+            torch.cuda.is_available = lambda: False
+    
+    device = "cpu"  # 明确指定使用CPU设备
+    
+    recommended_workers = min(
+        args.workers,
+        max(1, (args.epochs + args.batch_size - 1) // args.batch_size)
+    )
+    
+    print(f"Using {recommended_workers} workers (requested: {args.workers})")
+
+    # 使用自定义的初始化函数来确保每个worker进程使用CPU
+    multiprocessing.set_start_method('spawn', force=True)
+    
     processes = []
-    n_b_t = args.start_index
-    
-    for worker_id in range(args.workers):
-        n_e_t = n_b_t + worker_splits
-        n_b = int(n_b_t)
-        n_e = int(n_e_t)
-        
-        print("start processes generating %04d to %04d" % (n_b, n_e))
-        process = multiprocessing.Process(
-            target=dump_anymdp,
-            args=(
-                args.output_path,
-                args.coach_path,
-                args.max_steps,
-                range(n_b, n_e),
-                args.mode,
-                args.ndim,
-                args.state_dim,
-                args.action_dim,
-                args.seed
+    for batch_start in range(0, args.epochs, args.batch_size * recommended_workers):
+        for worker_id in range(recommended_workers):
+            start_idx = args.start_index + batch_start + worker_id * args.batch_size
+            end_idx = min(args.start_index + batch_start + (worker_id + 1) * args.batch_size, args.start_index + args.epochs)
+            if start_idx >= args.start_index + args.epochs:
+                break
+                
+            process = multiprocessing.Process(
+                target=dump_anymdp,
+                args=(
+                    args.output_path,
+                    args.coach_path,
+                    args.max_steps,
+                    range(start_idx, end_idx),
+                    args.mode,
+                    args.task_ndim,
+                    args.state_dim,
+                    args.action_dim,
+                    args.seed,
+                    args.task_source,
+                    args.task_file,
+                    device
+                )
             )
-        )
-        processes.append(process)
-        process.start()
-        
-        n_b_t = n_e_t
-    
-    for process in processes:
-        process.join()
+            # 设置进程启动方法
+            process.daemon = False
+            processes.append(process)
+            process.start()
+            
+        for process in processes:
+            process.join()
+        processes = []
