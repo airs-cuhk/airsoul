@@ -215,6 +215,9 @@ generator_config:
         run_opt: False
         run_online: False
         run_random: False
+    coach_policy_path: [PATH]
+    coach_policy_stage: "final"
+    coach_policy_index: -1
     benchmark_model_name: "ppo" # For gym
     benchmark_model_save_path: [PATH] # For gym
     output: "./online_eval/"
