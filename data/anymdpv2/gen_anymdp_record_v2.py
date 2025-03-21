@@ -617,17 +617,14 @@ def dump_anymdp(path_name, coach_path, max_steps, epoch_range, mode, ndim, state
             print(f"Using task {task_id} from file for epoch {epoch_id}")
             generator.task = tasks_from_file[task_id]
             generator.env.set_task(generator.task)
-        
-        # 根据任务来源决定是否跳过验证
+
         skip_validation = (task_source == 'FILE')
-        
-        # 统一使用 generate_data 方法并传递 skip_validation 参数
+
         if skip_validation:
             print("Using pre-validated task from file, skipping validation...")
         
         results = generator.generate_data(epoch_id, max_steps, skip_validation=skip_validation)
-        
-        # Skip if data generation failed
+
         if results is None:
             print(f"Skipping epoch {epoch_id} due to failed data generation")
             continue
@@ -654,13 +651,11 @@ def dump_anymdp(path_name, coach_path, max_steps, epoch_range, mode, ndim, state
         gc.collect()
 
 def init_worker():
-    # 在每个worker进程启动时设置环境变量和torch设置
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     if hasattr(torch, 'cuda') and hasattr(torch.cuda, 'is_available'):
         torch.cuda.is_available = lambda: False
 
 if __name__ == "__main__":
-    # 在主进程中设置环境变量，确保主进程下也使用CPU
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     if hasattr(torch, 'cuda') and hasattr(torch.cuda, 'is_available'):
         torch.cuda.is_available = lambda: False
@@ -692,7 +687,7 @@ if __name__ == "__main__":
         if hasattr(torch, 'cuda') and hasattr(torch.cuda, 'is_available'):
             torch.cuda.is_available = lambda: False
     
-    device = "cpu"  # 明确指定使用CPU设备
+    device = "cpu" 
     
     recommended_workers = min(
         args.workers,
@@ -701,7 +696,6 @@ if __name__ == "__main__":
     
     print(f"Using {recommended_workers} workers (requested: {args.workers})")
 
-    # 使用自定义的初始化函数来确保每个worker进程使用CPU
     multiprocessing.set_start_method('spawn', force=True)
     
     processes = []
@@ -729,7 +723,6 @@ if __name__ == "__main__":
                     device
                 )
             )
-            # 设置进程启动方法
             process.daemon = False
             processes.append(process)
             process.start()
