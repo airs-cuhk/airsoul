@@ -1,0 +1,71 @@
+---
+run_name: YOUR_NAME_TO_RUN
+master_port: "12402"
+load_model_path: [Path or None]
+
+log_config:
+  use_tensorboard: True
+  tensorboard_log: ./runs/
+  training_log: ./runs/train.log
+  evaluation_log: ./runs/eval.log
+
+model_config:
+  vocab_size: 128
+  max_position: 16000
+  context_warmup: 500
+  word_embeddings:
+      model_type: MLP
+      input_type: Discrete
+      input_size: 128
+      hidden_size: 256
+      dropout: 0.0
+  output_layers:
+      model_type: MLP
+      output_type: Discrete
+      input_size: 256
+      hidden_size: 128
+      layer_norm: True
+      residual_connect: False
+      dropout: 0.0
+  causal_block:
+      model_type: TRANSFORMER
+      num_layers: 4
+      hidden_size: 256
+      nhead: 8
+      inner_hidden_size: 512
+      dropout: 0.10
+      context_window: -1
+      checkpoints_density: -1
+      position_encoding_size: 2048
+      use_layer_norm: True
+      use_blockrecurrence: True
+      memory_length: 768
+      memory_type: KV
+
+train_config:
+  batch_size: 4
+  file_size: 500
+
+  manual_sync: True
+  seq_len: 4096
+  seg_len: 1024
+  max_epochs: 10
+
+  use_amp: true
+  use_scaler: false
+
+  lr: 1.0e-3
+  lr_decay_interval: 5000
+  lr_start_step: 0
+  data_path: [Path]
+  save_model_path: ./checkpoints
+
+test_config:
+  batch_size: 4
+  file_size: 500
+
+  seq_len: 4096
+  seg_len: 1024
+
+  data_path: [Path]
+  output: ./results/
