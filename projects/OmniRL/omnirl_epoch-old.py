@@ -26,7 +26,7 @@ from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
 from l3c.anymdp.solver import get_final_transition, get_final_reward
 from stable_baselines3 import DQN, A2C, TD3, PPO
-
+from l3c.anymdpv2.task_sampler import AnyMDPv2TaskSampler
 
 def string_mean_var(downsample_length, res):
     string=""
@@ -230,14 +230,48 @@ class OmniRLGenerator(GeneratorBase):
 
     def task_sampler_anymdp(self, epoch_id=0):
         task_id = None
+        
+        # 首先确定任务
         if(self.tasks is None):
             dims = self.config.env.lower().replace("anymdp", "").split("x")
-            task = AnyMDPTaskSampler(int(dims[0]), int(dims[1]))
+            if hasattr(self.model_config, 'state_encode') and self.model_config.state_encode.input_type == "Continuous":
+                task = AnyMDPv2TaskSampler(int(dims[0]), int(dims[1]))
+            else:
+                task = AnyMDPTaskSampler(int(dims[0]), int(dims[1]))
         else:
             task_num = len(self.tasks)
             task_id = (epoch_id * self.world_size + self.rank) % task_num
             task = self.tasks[task_id]
-        self.env.set_task(task)
+        
+        if self.model_config.state_encode.input_type == "Continuous":
+            try:
+                self.env = gym.make('anymdp-v2-visualizer-v1', max_steps=self.max_steps)
+                print("Using env: anymdp-v2-visualizer-v1 for continuous state space")
+            except:
+                try:
+                    self.env = gym.make('anymdp-v2', max_steps=self.max_steps)
+                    print("Using env: anymdp-v2 for continuous state space")
+                except Exception as e:
+                    print(f"Cannot create continuous state space env: {e}")
+                    raise
+        else:
+            try:
+                self.env = gym.make("anymdp-v0", max_steps=self.max_steps)
+                print("Using env: anymdp-v0 for discrete state space")
+            except Exception as e:
+                print(f"Cannot create discrete state space env: {e}")
+                raise
+        
+        try:
+            self.env.set_task(task)
+        except Exception as e:
+            print(f"Error setting task: {e}")
+            if isinstance(task, dict):
+                print("Task:", list(task.keys()))
+            else:
+                print("Task type:", type(task))
+            raise
+        
         return task_id
 
     def task_sampler_lake(self, epoch_id=0):
@@ -357,7 +391,12 @@ class OmniRLGenerator(GeneratorBase):
         elif self.config.env.lower().find("mountaincar") >= 0:
             state, *_ = self.env.reset(seed=123, options={"x_init": numpy.pi/2, "y_init": 0.5})
         else:
-            state, *_ = self.env.reset()
+            if self.model_config.state_encode.input_type == "Continuous":
+                state = self.env.reset()
+                if isinstance(state, tuple):
+                    state, _ = state
+                else:
+                    state, *_ = self.env.reset()
         return state
 
     def check_task(self, oracle_reward_file, oracle_prompt_file, random_reward_file, random_prompt_file, threshold = 1.0):
