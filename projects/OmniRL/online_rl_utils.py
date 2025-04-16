@@ -333,6 +333,210 @@ class LoadRLModel:
     def __call__(self):
         self.load()
         return self.benchmark_opt_model
+        
+class ContinuousRLModel:
+    def __init__(self, env, coach_policy_path=None, policy_stage='final', policy_index=-1):
+        self.env = env
+        self.coach_policy_path = coach_policy_path
+        self.policy_stage = policy_stage
+        self.policy_index = policy_index
+        self.lstm_states = None  
+        self.policy = None
+        self.policy_type = None
+        
+    def load(self):
+        if not self.coach_policy_path:
+            return None
+            
+        try:
+            with open(self.coach_policy_path, 'rb') as f:
+                coach_data = pickle.load(f)
+            
+            print(f"Using policy stage: {self.policy_stage}")
+            
+            if self.policy_stage in coach_data['behavior_policies']:
+                policies = coach_data['behavior_policies'][self.policy_stage]
+                if not policies:
+                    print(f"No policies found in stage {self.policy_stage}")
+                    return None
+                
+                if self.policy_index >= 0 and self.policy_index < len(policies):
+                    ref_policy = policies[self.policy_index]
+                    print(f"Using policy #{self.policy_index} from stage {self.policy_stage}")
+                else:
+                    best_idx = max(range(len(policies)), 
+                                key=lambda i: policies[i].get('avg_return', 0) if 'avg_return' in policies[i] else 0)
+                    ref_policy = policies[best_idx]
+                    print(f"Using best policy #{best_idx} from stage {self.policy_stage} (avg_return: {ref_policy.get('avg_return', 'N/A')})")
+                
+                policy_name = ref_policy.get('policy_name')
+                if not policy_name:
+                    print("Failed to find policy name")
+                    return None
+                    
+                print(f"Loading policy: {policy_name}")
+                self.policy_type = policy_name
+                
+                if policy_name == "ppo_lstm":
+                    try:
+                        policy_kwargs = {
+                            "lstm_hidden_size": ref_policy.get('lstm_hidden_size', 32),
+                            "n_lstm_layers": ref_policy.get('n_lstm_layers', 2),
+                            "enable_critic_lstm": ref_policy.get('enable_critic_lstm', True)
+                        }
+                        
+                        model = RecurrentPPO("MlpLstmPolicy", self.env, verbose=0, policy_kwargs=policy_kwargs)
+                        model.policy.load_state_dict(ref_policy['state_dict'])
+                        self.policy = model
+                        print(f"Successfully loaded LSTM policy")
+                        return self
+                    except ImportError:
+                        print("Failed to load LSTM policy")
+                        return None
+                        
+                elif policy_name == "ppo_mlp":
+                    policy_kwargs = ref_policy.get('policy_kwargs', {})
+                    model = PPO("MlpPolicy", self.env, verbose=0, policy_kwargs=policy_kwargs)
+                    model.policy.load_state_dict(ref_policy['state_dict'])
+                    self.policy = model
+                    print(f"Successfully loaded PPO policy")
+                    return self
+                    
+                elif policy_name == "sac":
+                    policy_kwargs = ref_policy.get('policy_kwargs', {})
+                    model = SAC("MlpPolicy", self.env, verbose=0, policy_kwargs=policy_kwargs)
+                    model.policy.load_state_dict(ref_policy['state_dict'])
+                    self.policy = model
+                    print(f"Successfully loaded SAC policy")
+                    return self
+                
+                elif policy_name == "random":
+                    self.policy_type = "random"
+                    print(f"Using random policy")
+                    return self
+                    
+                print(f"Unsupported policy type: {policy_name}")
+                return None
+            else:
+                print(f"Fail to find {self.policy_stage}")
+                return None
+                
+        except Exception as e:
+            print(f"Failed to load policy: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def predict(self, state):
+        if isinstance(state, list):
+            state = numpy.array(state, dtype=numpy.float32)
+        elif isinstance(state, numpy.ndarray):
+            state = state.astype(numpy.float32)
+        if self.policy_type == "random":
+            return self.env.action_space.sample()
+            
+        elif self.policy_type == "ppo_lstm":
+            action, self.lstm_states = self.policy.predict(
+                state, 
+                state=self.lstm_states,  
+                deterministic=True
+            )
+            return action
+            
+        else:  
+            action, _ = self.policy.predict(state, deterministic=True)
+            return action
+
+class ContinuousOnlineRL:
+    def __init__(self, env, max_trails, max_steps, downsample_trail):
+        self.env = env
+        self.max_trails = max_trails
+        self.max_steps = max_steps
+        self.downsample_trail = downsample_trail
+        
+    def train_sac(self, reward_normalizer=None, success_checker=None):
+        
+        rew_stat = []
+        step_trail = []
+        success_rate = []
+        success_rate_f = 0.0
+        
+        model = SAC(
+            "MlpPolicy",
+            self.env,
+            verbose=0,
+            learning_starts=100,
+            train_freq=1,
+            gradient_steps=1,
+            learning_rate=3e-4,
+            buffer_size=int(1e5),
+            batch_size=256,
+            policy_kwargs=dict(
+                net_arch=dict(
+                    pi=[256, 256],
+                    qf=[256, 256]
+                )
+            )
+        )
+        
+        for trail in range(self.max_trails):
+            result = self.env.reset()
+            if isinstance(result, tuple):
+                state, _ = result
+            else:
+                state = result
+                
+            if isinstance(state, list):
+                state = numpy.array(state, dtype=numpy.float32)
+            elif isinstance(state, numpy.ndarray):
+                state = state.astype(numpy.float32)
+                
+            done = False
+            step = 0
+            trail_reward = 0.0
+            
+            while not done and step < self.max_steps:
+                action, _ = model.predict(state, deterministic=False)
+                
+                result = self.env.step(action)
+                if len(result) == 5:  
+                    next_state, reward, terminated, truncated, info = result
+                    done = terminated or truncated
+                else:  
+                    next_state, reward, done, info = result
+                    terminated = done
+                
+                if isinstance(next_state, list):
+                    next_state = numpy.array(next_state, dtype=numpy.float32)
+                elif isinstance(next_state, numpy.ndarray):
+                    next_state = next_state.astype(numpy.float32)
+                
+                model.replay_buffer.add(state, next_state, action, reward, done, [{}])
+                if model.replay_buffer.size() > model.batch_size:
+                    model.train(gradient_steps=1, batch_size=model.batch_size)
+                
+                trail_reward += reward
+                state = next_state
+                step += 1
+            
+            if success_checker:
+                succ_fail = success_checker(reward, trail_reward, terminated if 'terminated' in locals() else done)
+            else:
+                succ_fail = 0  
+                
+            if trail + 1 < self.downsample_trail:
+                success_rate_f = (1 - 1/(trail+1)) * success_rate_f + succ_fail / (trail+1)
+            else:
+                success_rate_f = (1 - 1/self.downsample_trail) * success_rate_f + succ_fail / self.downsample_trail
+            
+            if reward_normalizer:
+                trail_reward = reward_normalizer(trail_reward)
+            
+            rew_stat.append(trail_reward)
+            success_rate.append(success_rate_f)
+            step_trail.append(step)
+        
+        return rew_stat, step_trail, success_rate
     
 if __name__ == "__main__":
     model_name = "dqn"

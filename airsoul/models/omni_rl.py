@@ -128,11 +128,14 @@ class OmniRL(POTARDecisionModel):
                                         reduce_dim=reduce_dim,
                                         need_cnt=True)
                 
-        loss["wm-r"] = weighted_loss(r_pred, 
-                                     gt=rewards.view(*rewards.shape,1), 
-                                     loss_type="mse",
-                                     loss_wht=loss_weight_a,
-                                     reduce_dim=reduce_dim)
+        if r_pred is None:
+            loss["wm-r"] = torch.tensor(0.0, device=wm_out.device)
+        else:
+            loss["wm-r"] = weighted_loss(r_pred, 
+                                        gt=rewards.view(*rewards.shape,1), 
+                                        loss_type="mse",
+                                        loss_wht=loss_weight_a,
+                                        reduce_dim=reduce_dim)
 
         # Policy Model
         if self.action_dtype == "Discrete":
@@ -217,36 +220,116 @@ class OmniRL(POTARDecisionModel):
             tag_in = torch.tensor([tag], dtype=torch.int64).to(device)
         else:
             tag_in = tag.to(device)
-
-        # Prepare the input observations
-        if(not isinstance(observation, torch.Tensor)):
-            if not self.config.state_diffusion.enable:
-                obs_in = torch.tensor([observation], dtype=torch.int64).to(device)
+        
+        # Prepare the input observations 
+        if not isinstance(observation, torch.Tensor):
+            if self.config.state_encode.input_type == "Continuous":
+                if isinstance(observation, (list, numpy.ndarray)):
+                    obs_in = torch.tensor(observation, dtype=torch.float32)
+                    if obs_in.dim() == 1:  
+                        input_size = self.config.state_encode.input_size
+                        if obs_in.shape[0] != input_size:
+                            if obs_in.shape[0] == 1:  
+                                obs_in = obs_in.expand(input_size)
+                            else:  
+                                temp = torch.zeros(input_size, dtype=torch.float32)
+                                temp[:min(obs_in.shape[0], input_size)] = obs_in[:min(obs_in.shape[0], input_size)]
+                                obs_in = temp
+                        
+                        if single_batch:
+                            obs_in = obs_in.unsqueeze(0).unsqueeze(0)  
+                        else:
+                            obs_in = obs_in.unsqueeze(0)  
+                else:
+                    input_size = self.config.state_encode.input_size
+                    obs_in = torch.zeros((1, 1, input_size), dtype=torch.float32)
+                    obs_in[0, 0, 0] = observation
             else:
-                obs_in = torch.tensor([observation], dtype=torch.float32).to(device)
+                if isinstance(observation, (int, float)) or (isinstance(observation, numpy.ndarray) and observation.size == 1):
+                    obs_in = torch.tensor([[observation]], dtype=torch.int64)
+                else:
+                    obs_in = torch.tensor([observation], dtype=torch.int64)
         else:
-            obs_in = observation.to(device)
+            obs_in = observation.clone()
+            if self.config.state_encode.input_type == "Continuous":
+                input_size = self.config.state_encode.input_size
+                if obs_in.dim() == 1:
+                    if obs_in.shape[0] != input_size:
+                        temp = torch.zeros(input_size, dtype=obs_in.dtype, device=obs_in.device)
+                        temp[:min(obs_in.shape[0], input_size)] = obs_in[:min(obs_in.shape[0], input_size)]
+                        obs_in = temp
+                    obs_in = obs_in.unsqueeze(0).unsqueeze(0)
+                elif obs_in.dim() == 2:  
+                    if obs_in.shape[1] != input_size:
+                        temp = torch.zeros(obs_in.shape[0], input_size, 
+                                        dtype=obs_in.dtype, device=obs_in.device)
+                        temp[:, :min(obs_in.shape[1], input_size)] = obs_in[:, :min(obs_in.shape[1], input_size)]
+                        obs_in = temp
+                    obs_in = obs_in.unsqueeze(1)
+                elif obs_in.dim() == 3:  
+                    if obs_in.shape[2] != input_size:
+                        temp = torch.zeros(obs_in.shape[0], obs_in.shape[1], input_size, 
+                                        dtype=obs_in.dtype, device=obs_in.device)
+                        temp[:, :, :min(obs_in.shape[2], input_size)] = obs_in[:, :, :min(obs_in.shape[2], input_size)]
+                        obs_in = temp
+            else:  
+                if obs_in.dim() == 0:
+                    obs_in = obs_in.unsqueeze(0).unsqueeze(0)
+                elif obs_in.dim() == 1:
+                    obs_in = obs_in.unsqueeze(0)
+
+        obs_in = obs_in.to(device)
 
         if(single_batch):
-            if(pro_in is not None):
+            if(pro_in is not None and pro_in.dim() < 2):
                 pro_in = pro_in.unsqueeze(0)
-            if(tag_in is not None):
+            if(tag_in is not None and tag_in.dim() < 2):
                 tag_in = tag_in.unsqueeze(0)
-            obs_in = obs_in.unsqueeze(0)
+            if(obs_in.dim() < 2):
+                obs_in = obs_in.unsqueeze(0)
 
-        B, T = obs_in.shape[:2]
+        # Prepare reward input
         if(self.r_included):
-            if(self.reward_dtype == "Discrete"):
-                default_r = self.default_r.to(device=device).expand(B, T)
-            elif(self.reward_dtype == "Continuous"):
-                default_r = self.default_r.to(device=device).expand(B, T, -1)
+            if self.reward_dtype == "Continuous":
+                default_r = torch.zeros((1, 1, self.config.reward_encode.input_size), 
+                                        dtype=torch.float32, device=device)
+            else:
+                default_r = self.default_r.to(dtype=torch.int64, device=device)
+        
+            if single_batch:
+                B = obs_in.shape[0]
+                NT = obs_in.shape[1] if obs_in.dim() > 1 else 1
+                if self.reward_dtype == "Continuous":
+                    default_r = default_r.expand(B, NT, -1)
+                else:
+                    default_r = default_r.expand(B, NT)
         else:
             default_r = None
         
-        if(self.action_dtype == "Discrete"):
-            default_a = self.default_a.to(device).expand(B, T)
-        elif(self.action_dtype == "Continuous"):
-            default_a = self.default_a.to(device).expand(B, T, -1)
+        # Prepare action input
+        if self.action_dtype == "Continuous":
+            default_a = self.default_a.to(dtype=torch.float32, device=device)
+        else:
+            default_a = self.default_a.to(dtype=torch.int64, device=device)
+        
+        # Ensure proper shape matching with observation batch
+        if single_batch:
+            B = obs_in.shape[0]
+            NT = obs_in.shape[1] if obs_in.dim() > 1 else 1
+            # match batch and time dimensions
+            if self.action_dtype == "Continuous":
+                default_a = default_a.expand(B, NT, -1)
+            else: 
+                default_a = default_a.expand(B, NT)
+        
+
+        if self.config.state_encode.input_type == "Discrete":
+            if self.s_encoder.input_size != 1:  
+                state_dim = self.config.state_encode.input_size
+                if obs_in.dim() == 2 and obs_in.size(1) == 1:
+                    if obs_in.max() >= state_dim:
+                        print(f"Warning: state index {obs_in.max().item()} exceeds state dimension {state_dim}")
+                        obs_in = torch.clamp(obs_in, 0, state_dim-1)
 
         wm_out, pm_out, _ = self.forward(
             obs_in,
@@ -318,14 +401,14 @@ class OmniRL(POTARDecisionModel):
         return state, act_out, reward
 
     def in_context_learn(self, observation,
-                    prompts,
-                    tags,
-                    action,
-                    reward,
-                    cache=None,
-                    need_cache=False,
-                    single_batch=True,
-                    single_step=True):
+                prompts,
+                tags,
+                action,
+                reward,
+                cache=None,
+                need_cache=False,
+                single_batch=True,
+                single_step=True):
         """
         In Context Reinforcement Learning Through an Sequence of Steps
         """
@@ -333,15 +416,49 @@ class OmniRL(POTARDecisionModel):
         pro_in = None
         obs_in = None
 
-        def proc(x):
+        def proc(x, is_state=False):
             if(x is None):
                 return x
-            if(single_batch and single_step):
-                return x.unsqueeze(0).unsqueeze(0).to(device)
-            elif(single_batch):
-                return x.unsqueeze(0).to(device)
-            elif(single_step):
-                return x.unsqueeze(1).to(device)
+            if not isinstance(x, torch.Tensor):
+                x = torch.tensor(x)
+                
+            if is_state:
+                if self.config.state_encode.input_type == "Continuous":
+                    input_size = self.config.state_encode.input_size
+                    
+                    if x.dim() == 0:  
+                        x = x.view(1).expand(input_size)
+                    elif x.dim() == 1:  
+                        if x.shape[0] != input_size:
+                            temp = torch.zeros(input_size, dtype=x.dtype, device=x.device)
+                            temp[:min(x.shape[0], input_size)] = x[:min(x.shape[0], input_size)]
+                            x = temp
+                    elif x.dim() == 2:  
+                        if x.shape[1] != input_size:
+                            temp = torch.zeros(x.shape[0], input_size, dtype=x.dtype, device=x.device)
+                            temp[:, :min(x.shape[1], input_size)] = x[:, :min(x.shape[1], input_size)]
+                            x = temp
+                
+            if single_batch and single_step:
+                if x.dim() == 0:
+                    return x.view(1, 1).to(device)
+                elif x.dim() == 1:
+                    return x.unsqueeze(0).unsqueeze(0).to(device)
+                elif x.dim() == 2:
+                    return x.unsqueeze(1).to(device)
+                return x.to(device)
+            elif single_batch:
+                if x.dim() == 0:
+                    return x.view(1).to(device)
+                elif x.dim() == 1:
+                    return x.unsqueeze(0).to(device)
+                return x.to(device)
+            elif single_step:
+                if x.dim() == 0:
+                    return x.view(1).to(device)
+                elif x.dim() == 1:
+                    return x.unsqueeze(1).to(device)
+                return x.to(device)
             return x.to(device)
 
         obs_in = observation
@@ -349,28 +466,167 @@ class OmniRL(POTARDecisionModel):
         tag_in = tags
         act_in = action
         rew_in = reward
-
-        if(not isinstance(obs_in, torch.Tensor)):
+        
+        if not isinstance(obs_in, torch.Tensor):
             obs_in = torch.tensor(obs_in)
-        obs_in = proc(obs_in)
-        if(pro_in is not None and not isinstance(pro_in, torch.Tensor)):
+        
+        if self.config.state_encode.input_type == "Continuous":
+            input_size = self.config.state_encode.input_size
+            
+            if obs_in.dim() == 0:  
+                obs_in = torch.zeros(input_size, dtype=torch.float32).fill_(float(obs_in))
+            elif obs_in.dim() == 1:  
+                if obs_in.shape[0] != input_size:
+                    temp = torch.zeros(input_size, dtype=torch.float32)
+                    temp[:min(obs_in.shape[0], input_size)] = obs_in[:min(obs_in.shape[0], input_size)]
+                    obs_in = temp
+            elif obs_in.dim() == 2:  
+                if obs_in.shape[1] != input_size:
+                    temp = torch.zeros(obs_in.shape[0], input_size, dtype=torch.float32)
+                    temp[:, :min(obs_in.shape[1], input_size)] = obs_in[:, :min(obs_in.shape[1], input_size)]
+                    obs_in = temp
+            
+            if single_batch and single_step:
+                if obs_in.dim() < 3:
+                    if obs_in.dim() == 1:
+                        obs_in = obs_in.unsqueeze(0).unsqueeze(0)
+                    elif obs_in.dim() == 2:
+                        obs_in = obs_in.unsqueeze(1)
+            elif single_batch:
+                if obs_in.dim() == 1:
+                    obs_in = obs_in.unsqueeze(0)
+            elif single_step:
+                if obs_in.dim() == 1:
+                    obs_in = obs_in.unsqueeze(1)
+        else:
+            obs_in = proc(obs_in)
+
+        if self.config.state_encode.input_type == "Continuous":
+            obs_in = obs_in.to(torch.float32)
+        
+        obs_in = obs_in.to(device)
+        
+        if pro_in is not None and not isinstance(pro_in, torch.Tensor):
             pro_in = torch.tensor(pro_in)
         pro_in = proc(pro_in)
-        if(tag_in is not None and not isinstance(tag_in, torch.Tensor)):
+        
+        if tag_in is not None and not isinstance(tag_in, torch.Tensor):
             tag_in = torch.tensor(tag_in)
         tag_in = proc(tag_in)
-        if(not isinstance(action, torch.Tensor)):
+        
+        if not isinstance(action, torch.Tensor):
             act_in = torch.tensor(act_in)
-        act_in = proc(act_in)
-        if(not isinstance(reward, torch.Tensor) and reward is not None):
-            rew_in = torch.tensor(rew_in)
-        rew_in = proc(rew_in)
 
-        if self.reward_dtype == "Continuous":
-            rew_in = rew_in.to(torch.float32)
+        if self.action_dtype == "Continuous":
+            action_size = self.config.action_encode.input_size
+            
+            if act_in.dim() == 0:  
+                act_in = torch.zeros(action_size, dtype=torch.float32).fill_(float(act_in))
+            elif act_in.dim() == 1:  
+                if act_in.shape[0] != action_size:
+                    temp = torch.zeros(action_size, dtype=torch.float32)
+                    temp[:min(act_in.shape[0], action_size)] = act_in[:min(act_in.shape[0], action_size)]
+                    act_in = temp
+            
+            if single_batch and single_step:
+                if act_in.dim() < 3:
+                    if act_in.dim() == 1:
+                        act_in = act_in.unsqueeze(0).unsqueeze(0)
+                    elif act_in.dim() == 2:
+                        act_in = act_in.unsqueeze(1)
+            elif single_batch:
+                if act_in.dim() == 1:
+                    act_in = act_in.unsqueeze(0)
+            elif single_step:
+                if act_in.dim() == 1:
+                    act_in = act_in.unsqueeze(1)
         else:
-            rew_in = rew_in.to(torch.int32)
-
+            act_in = proc(act_in)
+        
+        act_in = act_in.to(device)
+        
+        if self.r_included:
+            if reward is None:
+                B, NT = obs_in.shape[:2]
+                if self.reward_dtype == "Continuous":
+                    rew_in = torch.zeros((B, NT, self.config.reward_encode.input_size), 
+                                        dtype=torch.float32, device=device)
+                else:
+                    rew_in = torch.zeros((B, NT), dtype=torch.int64, device=device)
+            else:
+                if not isinstance(reward, torch.Tensor):
+                    rew_in = torch.tensor(reward, dtype=torch.float32 if self.reward_dtype == "Continuous" else torch.int64)
+                else:
+                    rew_in = reward.clone()
+                
+                if self.reward_dtype == "Continuous":
+                    reward_size = self.config.reward_encode.input_size
+                    
+                    if rew_in.dim() == 0:  
+                        if reward_size > 1:
+                            rew_in = torch.zeros(reward_size, dtype=torch.float32).fill_(float(rew_in))
+                        else:
+                            rew_in = rew_in.view(1)
+                    elif rew_in.dim() == 1:  
+                        if rew_in.shape[0] != reward_size:
+                            temp = torch.zeros(reward_size, dtype=torch.float32)
+                            temp[:min(rew_in.shape[0], reward_size)] = rew_in[:min(rew_in.shape[0], reward_size)]
+                            rew_in = temp
+                    
+                    if single_batch and single_step:
+                        if rew_in.dim() < 3:
+                            if rew_in.dim() == 1:
+                                rew_in = rew_in.unsqueeze(0).unsqueeze(0)
+                            elif rew_in.dim() == 2:
+                                rew_in = rew_in.unsqueeze(1)
+                    elif single_batch:
+                        if rew_in.dim() == 1:
+                            rew_in = rew_in.unsqueeze(0)
+                    elif single_step:
+                        if rew_in.dim() == 1:
+                            rew_in = rew_in.unsqueeze(1)
+                else:
+                    if rew_in.dim() == 0:
+                        rew_in = rew_in.view(1)
+                    
+                    if single_batch and single_step:
+                        rew_in = rew_in.unsqueeze(0).unsqueeze(0) if rew_in.dim() <= 1 else rew_in
+                    elif single_batch:
+                        rew_in = rew_in.unsqueeze(0) if rew_in.dim() <= 1 else rew_in
+                    elif single_step:
+                        rew_in = rew_in.unsqueeze(1) if rew_in.dim() <= 1 else rew_in
+                
+                rew_in = rew_in.to(device)
+                
+                B, NT = obs_in.shape[:2]
+                if rew_in.shape[:2] != (B, NT):
+                    if self.reward_dtype == "Continuous":
+                        if rew_in.dim() == 3:
+                            new_rew = torch.zeros((B, NT, self.config.reward_encode.input_size), 
+                                                dtype=rew_in.dtype, device=device)
+                            for b in range(min(B, rew_in.shape[0])):
+                                for t in range(min(NT, rew_in.shape[1])):
+                                    new_rew[b, t] = rew_in[b, t]
+                            rew_in = new_rew
+                        else:
+                            temp = rew_in
+                            while temp.dim() < 3:
+                                temp = temp.unsqueeze(0)
+                            rew_in = temp.expand(B, NT, -1)
+                    else:
+                        if rew_in.dim() == 2:
+                            new_rew = torch.zeros((B, NT), dtype=rew_in.dtype, device=device)
+                            for b in range(min(B, rew_in.shape[0])):
+                                for t in range(min(NT, rew_in.shape[1])):
+                                    new_rew[b, t] = rew_in[b, t]
+                            rew_in = new_rew
+                        else:
+                            temp = rew_in
+                            while temp.dim() < 2:
+                                temp = temp.unsqueeze(0)
+                            rew_in = temp.expand(B, NT)
+        else:
+            rew_in = None
         # observation, prompt, tag, action, reward; update memory = true
         _, _, new_cache = self.forward(
             obs_in,
@@ -378,6 +634,7 @@ class OmniRL(POTARDecisionModel):
             tag_in,
             act_in,
             rew_in,
+            cache=cache,
             need_cache=need_cache,
             update_memory=True)
         

@@ -20,12 +20,13 @@ from pathlib import Path
 import random
 import re
 from airsoul.utils import AgentVisualizer
-from online_rl_utils import OnlineRL, LoadRLModel
+from online_rl_utils import OnlineRL, LoadRLModel, ContinuousRLModel
 from gym_env_wapper import DiscreteEnvWrapper, Switch2, DarkroomEnv
 from gymnasium.envs.toy_text.frozen_lake import generate_random_map
 from xenoverse.anymdp import AnyMDPTaskSampler
 from xenoverse.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
 from xenoverse.anymdp.solver import get_final_transition, get_final_reward
+from xenoverse.anymdpv2 import AnyMDPv2TaskSampler
 from stable_baselines3 import DQN, A2C, TD3, PPO
 
 
@@ -177,6 +178,11 @@ class OmniRLEpoch:
 
 # use gamma_vocabulary and tag_vocabulary
 class OmniRLGenerator(GeneratorBase):
+    def __init__(self, model_config, **kwargs):
+        self.model_config = model_config 
+        super().__init__(**kwargs)
+        self.continuous_space = (hasattr(self.model_config, 'state_encode') and self.model_config.state_encode.input_type == "Continuous")
+        
     def preprocess(self):
         self.mult_anymdp_task = False
         if(self.config.env.lower().find("lake") >= 0):
@@ -228,7 +234,7 @@ class OmniRLGenerator(GeneratorBase):
                             *benchmark_logger_keys, 
                             on=self.main, 
                             use_tensorboard=False)
-    
+        
     def epoch_end(self, epoch_id):
         pass
 
@@ -236,12 +242,44 @@ class OmniRLGenerator(GeneratorBase):
         task_id = None
         if(self.tasks is None):
             dims = self.config.env.lower().replace("anymdp", "").split("x")
-            task = AnyMDPTaskSampler(int(dims[0]), int(dims[1]))
+            if hasattr(self.model_config, 'state_encode') and self.model_config.state_encode.input_type == "Continuous":
+                task = AnyMDPv2TaskSampler(int(dims[0]), int(dims[1]))
+            else:
+                task = AnyMDPTaskSampler(int(dims[0]), int(dims[1]))
         else:
             task_num = len(self.tasks)
             task_id = (epoch_id * self.world_size + self.rank) % task_num
             task = self.tasks[task_id]
-        self.env.set_task(task)
+        
+        if self.continuous_space:
+            try:
+                self.env = gym.make('anymdp-visualizer-v2', max_steps=self.max_steps)
+                print("Using env: anymdp-v2-visualizer-v1 for continuous state space")
+            except:
+                try:
+                    self.env = gym.make('anymdp-v2', max_steps=self.max_steps)
+                    print("Using env: anymdp-v2 for continuous state space")
+                except Exception as e:
+                    print(f"Cannot create continuous state space env: {e}")
+                    raise
+        else:
+            try:
+                self.env = gym.make("anymdp-v0", max_steps=self.max_steps)
+                print("Using env: anymdp-v0 for discrete state space")
+            except Exception as e:
+                print(f"Cannot create discrete state space env: {e}")
+                raise
+        
+        try:
+            self.env.set_task(task)
+        except Exception as e:
+            print(f"Error setting task: {e}")
+            if isinstance(task, dict):
+                print("Task:", list(task.keys()))
+            else:
+                print("Task type:", type(task))
+            raise
+        
         return task_id
 
     def task_sampler_lake(self, epoch_id=0):
@@ -361,7 +399,12 @@ class OmniRLGenerator(GeneratorBase):
         elif self.config.env.lower().find("mountaincar") >= 0:
             state, *_ = self.env.reset(seed=123, options={"x_init": numpy.pi/2, "y_init": 0.5})
         else:
-            state, *_ = self.env.reset()
+            if self.continuous_space:
+                state = self.env.reset()
+                if isinstance(state, tuple):
+                    state, _ = state
+                else:
+                    state, *_ = self.env.reset()
         return state
 
     def check_task(self, oracle_reward_file, oracle_prompt_file, random_reward_file, random_prompt_file, threshold = 1.0):
@@ -554,21 +597,32 @@ class OmniRLGenerator(GeneratorBase):
                 log_warn(f"Folder {folder_path} does not exist.")
         print("Finish Learning.")
 
-    def benchmark(self, epoch_id):
+    def benchmark(self, epoch_id):        
         if self.config.run_benchmark.run_opt:
-            trained_rl = LoadRLModel(self.env, 
+            if self.continuous_space:
+                coach_model = ContinuousRLModel(
+                env=self.env,
+                coach_policy_path=self.config.coach_policy_path,
+                policy_stage=getattr(self.config, 'coach_policy_stage', 'final'),
+                policy_index=getattr(self.config, 'coach_policy_index', -1)
+                )
+                coach_model_loaded = coach_model.load()
+                if coach_model_loaded:
+                    self.benchmark_opt_model = coach_model.predict
+            else:
+                trained_rl = LoadRLModel(self.env, 
                                     self.config.env, 
                                     model_name=self.config.benchmark_model_name,
                                     model_path=self.config.benchmark_model_save_path)
-            self.benchmark_opt_model = trained_rl()
-        
+                self.benchmark_opt_model = trained_rl()
+
         def run_online_rl():
             online_rl = OnlineRL(env=self.env, 
-                                 env_name=self.config.env.lower(),
-                                 model_name=self.config.benchmark_model_name.lower(),
-                                 max_trails=self.config.max_trails,
-                                 max_steps=self.config.max_steps,
-                                 downsample_trail=self.config.downsample_trail)
+                                env_name=self.config.env.lower(),
+                                model_name=self.config.benchmark_model_name.lower(),
+                                max_trails=self.config.max_trails,
+                                max_steps=self.config.max_steps,
+                                downsample_trail=self.config.downsample_trail)
             rew_stat, step_trail, success_rate = online_rl()
             ds_step_trail = downsample(step_trail, self.config.downsample_trail)
             ds_rewards = downsample(rew_stat, self.config.downsample_trail)
@@ -577,8 +631,6 @@ class OmniRLGenerator(GeneratorBase):
                                 step=ds_step_trail,
                                 reward=ds_rewards,
                                 success_rate=ds_success)
-
-
         # Function to run opt model or random model
         def run_benchmark(benchmark_model, logger_benchmark, stat_benchmark, epoch_id):
             rew_stat = []
@@ -597,10 +649,23 @@ class OmniRLGenerator(GeneratorBase):
                 trail_reward = 0.0
                 done = False
                 new_state = self.reset_env()
+
+                if self.continuous_space:
+                    if isinstance(new_state, list):
+                        new_state = numpy.array(new_state, dtype=numpy.float32)
+                    elif isinstance(new_state, numpy.ndarray):
+                        new_state = new_state.astype(numpy.float32)
                 
                 while not done:
-                    action= benchmark_model(new_state)
+                    action = benchmark_model(new_state)
+                    # if hasattr(self.env.action_space, 'n') and not isinstance(action, int):
+                    #     action = int(action)
                     new_state, new_reward, terminated, truncated, *_ = self.env.step(action)
+                    if self.continuous_space:
+                        if isinstance(new_state, list):
+                            new_state = numpy.array(new_state, dtype=numpy.float32)
+                        elif isinstance(new_state, numpy.ndarray):
+                            new_state = new_state.astype(numpy.float32)
                     if self.config.env.lower().find("anymdp") >= 0:
                         done = terminated
                     else:
@@ -652,10 +717,14 @@ class OmniRLGenerator(GeneratorBase):
             run_online_rl()
 
         if self.config.run_benchmark.run_random:
-            def random_model(state):
-                return random.randint(0,self.config.action_clip - 1)
+            if self.continuous_space:
+                def random_model(state):
+                    return self.env.action_space.sample()
+            else:
+                def random_model(state):
+                    return random.randint(0,self.config.action_clip - 1)
             run_benchmark(random_model, self.logger_random, self.stat_random, epoch_id)
-        
+
     def in_context_learn_with_tag(self, trail_reward, step, trail_state_arr, trail_action_arr, trail_reward_arr):
         if self.config.env.lower().find("pendulum") >= 0:
             if trail_reward < -800:
@@ -705,8 +774,7 @@ class OmniRLGenerator(GeneratorBase):
                 single_step=False)
 
         
-    def __call__(self, epoch_id):
-
+    def __call__(self, epoch_id):        
         task_id = self.task_sampler(epoch_id=epoch_id)
 
         if self.mult_anymdp_task:
@@ -749,8 +817,10 @@ class OmniRLGenerator(GeneratorBase):
         pred_state_dist = None
 
         interactive_prompt = numpy.array([3]) # opt3 with gamma 0.994
-        self.interactive_tag = numpy.array([7]) # Unknown, let model deside current policy quality 
-
+        if self.continuous_space:
+            self.interactive_tag = numpy.array([5]) 
+        else:
+            self.interactive_tag = numpy.array([7]) # Unknown, let model deside current policy quality 
         if self.config.learn_from_data:
             self.in_context_learn_from_teacher(epoch_id)
 
@@ -768,12 +838,14 @@ class OmniRLGenerator(GeneratorBase):
             previous_state = self.reset_env()
             trail_state_arr.append(previous_state)
             obs_arr.append(previous_state)
-            if(pred_state_dist is not None):
-                trail_obs_loss += -numpy.log(pred_state_dist[int(previous_state)].item())
+            if self.model_config.state_encode.input_type == "Discrete":
+                if(pred_state_dist is not None):
+                    trail_obs_loss += -numpy.log(pred_state_dist[int(previous_state)].item())
             temp = self._scheduler(total_step)
             while not done:
                 # Generate action, world model prediction
-                pred_state_dist, action, pred_reward = self.model.module.generate(
+                if self.continuous_space:
+                    pred_state, action, pred_reward = self.model.module.generate(
                     previous_state,
                     interactive_prompt,
                     self.interactive_tag,
@@ -781,6 +853,16 @@ class OmniRLGenerator(GeneratorBase):
                     need_numpy=True,
                     single_batch=True,
                     future_prediction=True)
+                    
+                else:
+                    pred_state_dist, action, pred_reward = self.model.module.generate(
+                        previous_state,
+                        interactive_prompt,
+                        self.interactive_tag,
+                        temp=temp,
+                        need_numpy=True,
+                        single_batch=True,
+                        future_prediction=True)
                 env_action = action % self.config.action_clip 
                 # Interact with environment         
                 new_state, new_reward, terminated, truncated, *_ = self.env.step(env_action)
@@ -806,7 +888,6 @@ class OmniRLGenerator(GeneratorBase):
                     else:
                         frames.append((previous_state, action, new_reward, new_state, done>0.1))
 
-
                 # start learning     
                 cache = self.model.module.in_context_learn(
                     previous_state,
@@ -826,7 +907,14 @@ class OmniRLGenerator(GeneratorBase):
                 obs_arr.append(new_state) 
                 previous_state = new_state
 
-                trail_obs_loss += -numpy.log(pred_state_dist[int(new_state)].item())
+                if self.continuous_space:
+                    # Use Mean Squared Error for continuous spaces
+                    error_value = numpy.sum((pred_state - new_state) ** 2)
+                    # Optionally normalize by the number of dimensions
+                    normalized_error = error_value / new_state.shape[0]
+                    trail_obs_loss += normalized_error
+                else:
+                    trail_obs_loss += -numpy.log(pred_state_dist[int(new_state)].item())
                 trail_reward += new_reward
                 trail_reward_shaped += shaped_reward
                 trail_reward_loss += (shaped_reward - pred_reward) ** 2
