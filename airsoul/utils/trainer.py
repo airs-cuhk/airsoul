@@ -18,11 +18,9 @@ from .tools import create_folder, count_parameters, safety_check, apply_gradient
 from .scheduler import noam_scheduler
 
 def is_multi_node():
-    # 检查NODE_RANK（torchrun多机时设置）
-    node_rank = os.environ.get('NODE_RANK')
-    if node_rank is not None:
-        return True  # 有NODE_RANK说明是多机 
-    return False
+    world_size = int(os.environ.get('WORLD_SIZE', 1))
+    local_world_size = int(os.environ.get('LOCAL_WORLD_SIZE', 1))
+    return world_size > local_world_size
 
 
 def EpochManager(cls):
@@ -255,9 +253,9 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
                 model_type, train_objects, evaluate_objects, extra_info):
     """
     """
-    local_rank = int(os.environ["LOCAL_RANK"])
     if use_gpu:
         if is_multi_node():
+            local_rank = int(os.environ["LOCAL_RANK"])
             torch.cuda.set_device(local_rank)
             device = torch.device(f'cuda:{local_rank}')
             device_type = 'cuda'
@@ -289,6 +287,7 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
     if use_gpu:
         if is_multi_node():
             # If using multiple nodes, we need to specify the device_ids
+            local_rank = int(os.environ["LOCAL_RANK"])
             model = DDP(model, device_ids=[local_rank], output_device=local_rank)
         else:
             model = DDP(model, device_ids=[rank])
