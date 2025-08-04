@@ -5,7 +5,6 @@ import os
 import pathlib
 from tqdm import tqdm
 import numpy as np
-import torchvision.transforms as TF
 from PIL import Image
 from scipy import linalg
 

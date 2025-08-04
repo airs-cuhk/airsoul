@@ -285,15 +285,17 @@ class OmniRL(POTARDecisionModel):
                 o_pred = self.s_diffusion.inference(wm_out)[-1]
                 state = o_pred.detach().cpu().squeeze()
                 
-            reward = r_pred.detach().cpu().squeeze()
-
-            if(need_numpy):
-                state = state.numpy()
-                if(state.size < 2):
-                    state = state.item()
-                reward = reward.numpy()
-                if(reward.size < 2):
-                    reward = reward.item()
+            if r_pred is not None:
+                reward = r_pred.detach().cpu().squeeze()
+                if(need_numpy):
+                    state = state.numpy()
+                    if(state.size < 2):
+                        state = state.item()
+                    reward = reward.numpy()
+                    if(reward.size < 2):
+                        reward = reward.item()
+            else:
+                reward = 0.0
 
         else:
             state = None

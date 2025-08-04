@@ -9,6 +9,8 @@ from .mamba import MambaBlock
 from .blockrec_wrapper import BlockRecurrentWrapper
 from .gsa import GLABlock, GSABlock
 from .rwkv6 import RWKV6Layer
+from .rwkv7 import RWKV7Layer
+from .deltanet import GatedDeltaNet
 
 class CausalBlock(nn.Module):
     """
@@ -84,6 +86,25 @@ class CausalBlock(nn.Module):
                 intermediate_size=config.inner_hidden_size,
                 num_heads=config.nhead,
             )
+        elif(self.model_type == "rwkv7"):
+            main_encoder = MultiBlocks(
+                RWKV7Layer,
+                config.num_layers,
+                need_block_wrapper=False,
+                io_size=config.hidden_size,
+                intermediate_size=config.inner_hidden_size,
+                num_heads=config.nhead
+            )
+        elif(self.model_type == "deltanet"):
+            main_encoder = MultiBlocks(
+                GatedDeltaNet,
+                config.num_layers,
+                need_block_wrapper=False,
+                io_size=config.hidden_size,
+                intermediate_size=config.inner_hidden_size,
+                num_heads=config.nhead,
+                expend_v = config.expend_v
+            )           
         else:
             raise Exception("No such causal model: %s" % config.model_type)
         

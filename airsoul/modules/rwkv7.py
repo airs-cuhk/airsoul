@@ -9,20 +9,14 @@ from airsoul.utils import format_cache, memory_cpy, log_warn
 class RWKV7Layer(nn.Module):
     def __init__(self,
                 io_size: int=512,
-                hidden_ratio: float = 4,
                 intermediate_size: int = 1024,
-                num_hidden_layers: int = 24,
                 num_heads: int = 4,
-                max_position_embeddings: int = 2048,
                 layer_idx: int = 0):
         super().__init__()
         self.config = RWKV7Config(
                   hidden_size=io_size,
-                  hidden_ratio=hidden_ratio,
                   intermediate_size=intermediate_size,
-                  num_hidden_layers=num_hidden_layers,
-                  num_heads=num_heads,
-                  max_position_embeddings=max_position_embeddings)
+                  num_heads=num_heads)
         self.layer_idx = layer_idx
         if layer_idx == 0:
             is_first_layer = True
