@@ -27,7 +27,7 @@ model_config:
       n_res_block: 2
 
   decision_block:
-      rsa_type: podaw  # "podtawr", "podtaw", "podaw", "odawr", "odtawr", "odtaw", "odaw", "opdtawr"
+      rsa_type: pota  #potar, otar, oar, oa
       state_encode:
           input_type: Continuous
           input_size: 1024

@@ -23,8 +23,8 @@ class CausalBlock(nn.Module):
         if(config.has_attr("is_generate")):
             is_generate = config.is_generate
         else:
+            assert hasattr(config, "is_generate"), "is_generate is not set"
             is_generate = False
-
         if(self.model_type == "transformer"):
             main_encoder = ARTransformerEncoder(
                 config.num_layers, 
@@ -43,9 +43,10 @@ class CausalBlock(nn.Module):
                 fc_hidden=config.inner_hidden_size,
                 fc_dropout=config.dropout,
                 io_size=config.hidden_size,
+                gate_bound=config.gate_bound,
                 num_heads=config.nhead,
                 num_slots=config.memory_length,
-                is_generate=is_generate
+                is_generate=is_generate,
             )
         elif(self.model_type == "gla"):
             main_encoder = MultiBlocks(
@@ -125,7 +126,8 @@ class CausalBlock(nn.Module):
             if(config.is_frozen):
                 for param in self.parameters():
                     param.requires_grad_(False)
-
+    def get_o_list(self):
+        return self.layers.get_o_list()
     @property
     def position(self):
         if(hasattr(self.layers, 'position')):

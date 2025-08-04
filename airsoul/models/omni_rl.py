@@ -220,10 +220,7 @@ class OmniRL(POTARDecisionModel):
 
         # Prepare the input observations
         if(not isinstance(observation, torch.Tensor)):
-            if not self.config.state_diffusion.enable:
-                obs_in = torch.tensor([observation], dtype=torch.int64).to(device)
-            else:
-                obs_in = torch.tensor([observation], dtype=torch.float32).to(device)
+            obs_in = torch.tensor([observation], dtype=torch.int64).to(device)
         else:
             obs_in = observation.to(device)
 
@@ -234,19 +231,11 @@ class OmniRL(POTARDecisionModel):
                 tag_in = tag_in.unsqueeze(0)
             obs_in = obs_in.unsqueeze(0)
 
-        B, T = obs_in.shape[:2]
         if(self.r_included):
-            if(self.reward_dtype == "Discrete"):
-                default_r = self.default_r.to(device=device).expand(B, T)
-            elif(self.reward_dtype == "Continuous"):
-                default_r = self.default_r.to(device=device).expand(B, T, -1)
+            default_r = self.default_r.to(device)
         else:
             default_r = None
-        
-        if(self.action_dtype == "Discrete"):
-            default_a = self.default_a.to(device).expand(B, T)
-        elif(self.action_dtype == "Continuous"):
-            default_a = self.default_a.to(device).expand(B, T, -1)
+        default_a = self.default_a.to(device)
 
         wm_out, pm_out, _ = self.forward(
             obs_in,
@@ -269,9 +258,7 @@ class OmniRL(POTARDecisionModel):
                 act_in = a_pred
                 act_out = act_in.squeeze()
         else:
-            a_latent = self.a_diffusion.inference(cond=pm_out)[-1]
-            act_in = self.a_decoder(a_latent)
-            act_out = act_in.squeeze()
+            act_out = self.a_diffusion.inference(pm_out)[-1]
 
         act_out = act_out.detach().cpu().squeeze()
         if(need_numpy):
@@ -295,8 +282,7 @@ class OmniRL(POTARDecisionModel):
             if not self.config.state_diffusion.enable:
                 state = o_pred.detach().cpu().squeeze()
             else:
-                o_latent = self.s_diffusion.inference(cond=wm_out)[-1]
-                o_pred = self.s_decoder(o_latent)
+                o_pred = self.s_diffusion.inference(wm_out)[-1]
                 state = o_pred.detach().cpu().squeeze()
                 
             if r_pred is not None:

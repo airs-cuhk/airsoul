@@ -1,4 +1,4 @@
-from .mazeworld_dataset import MazeDataSet
+from .mazeworld_dataset import MazeDataSet, MazeTaskDataSet, MazeDataSetShort, ProcthorDataSet, MazeDataSetRandomActionTest
 from .metalm_dataset import LMDataSet
 from .anymdp_dataset import AnyMDPDataSet, AnyMDPv2DataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 from .multiagent_dataset import MultiAgentDataSetVetorized

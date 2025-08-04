@@ -202,14 +202,22 @@ class POTARDecisionModel(nn.Module):
         B = o_arr.shape[0]
         NT = o_arr.shape[1]
 
-        assert a_arr.shape[:2] == o_arr.shape[:2]
+        # print("s_discrete", self.s_discrete)
+        # print("state_dropout: ", state_dropout)
+        # print("obs : ", o_arr)
+        # print("prompt : ", p_arr)
+        # print("action : ", a_arr)
+        # print("action : ", a_arr.dtype)
+
+
+        assert a_arr.shape[:2] == o_arr.shape[:2], (a_arr.shape, o_arr.shape)
 
         if(self.p_included):
             assert p_arr is not None
-            assert p_arr.shape[:2] == o_arr.shape[:2]
+            assert p_arr.shape[:2] == o_arr.shape[:2], (p_arr.shape, o_arr.shape)
         if(self.r_included):
             assert r_arr is not None
-            assert r_arr.shape[:2] == o_arr.shape[:2]
+            assert r_arr.shape[:2] == o_arr.shape[:2], (r_arr.shape, o_arr.shape)
             if(self.r_discrete):
                 r_arr = torch.where(r_arr<0, torch.full_like(r_arr, self.r_dim), r_arr)
             else:
@@ -221,16 +229,30 @@ class POTARDecisionModel(nn.Module):
 
         # Add state dropouts
         if not self.s_discrete and state_dropout > 0.0:
+            
             H = o_arr.shape[2]
             device = o_arr.device
             p_noise = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
+            p_noise = ( state_dropout ) * torch.ones(B, NT, 1).to(device)
+            
             p_mask = (0.5 * state_dropout * torch.rand((B, 1, 1)) * torch.ones(B, NT, 1)).to(device)
-            eps = torch.randn((B, NT, H)).to(device)
+            sigma = torch.abs(torch.randn(B, NT, H)).to(device)
+            eps = torch.normal(0.0, sigma).to(device) # torch.randn((B, NT, H)).to(device)
             dp_eps = torch.bernoulli(p_noise)
             dp_mask = torch.bernoulli(p_mask)
+            # print("random state")
+            # print("p_noise: ", p_noise)
+            # print("dp_eps: ", dp_eps)
+            # print("dp_mask: ", dp_mask)
+            # print("eps * dp_eps: ", eps * dp_eps)
+            
             # Calculate dropout for mazes: 50% * state_dropout add noise, 50% * state_dropout are directly masked
             observation_in = o_arr + eps * dp_eps
-            observation_in = observation_in * (1 - dp_mask) + self.mask_query * dp_mask
+            # observation_in = observation_in * (1 - dp_mask) + self.mask_query * dp_mask
+            
+            # print("observation diff: ", (observation_in - o_arr==0).all())
+            # print("-----------------------------------")
+
         else:
             observation_in = o_arr
 
@@ -242,6 +264,8 @@ class POTARDecisionModel(nn.Module):
         var_dict = {}
         var_dict["o_in"] = self.s_encoder(observation_in).view(B, NT, 1, -1)
         var_dict["a_in"] = self.a_encoder(a_arr).view(B, NT, 1, -1)
+        
+        
 
         # Insert Prompts, tags and rewards if necessary
         if(self.t_included):
@@ -261,15 +285,19 @@ class POTARDecisionModel(nn.Module):
             var_name = f"{char}_in"
             inputs.append(var_dict[var_name])
 
+        # print("var_dict: ", var_dict)
         # [B, NT, 2-5, H]
         outputs = torch.cat(inputs, dim=2)
 
         # Add Type Embedding
         outputs = outputs + self.type_query
+        
 
         # Concatenate [r_0, s_0, a_0, r_1, s_1, a_1, r_2, ...] to acquire the size of [B, NT * 3, H]
         outputs = outputs.view(B, NT * self.rsa_occ, -1)
 
+        # print("after output: ", outputs)
+        # print("cache: ", cache)
         # Temporal Encoders
         outputs, new_cache = self.causal_model(outputs, cache=cache, need_cache=need_cache, update_memory=update_memory)
 
@@ -279,9 +307,10 @@ class POTARDecisionModel(nn.Module):
         # Extract world models outputs
         wm_out = outputs[:, :, self.wm_pos]
         pm_out = outputs[:, :, self.pm_pos]
-
+        # print("pm_out: ",pm_out)
         return wm_out, pm_out, new_cache
-    
+    def get_o_list(self):
+        return self.causal_model.get_o_list()
     def post_decoder(self, wm_out, pm_out, T=1.0):
         obs_output, act_output, rew_output = None, None, None
         if(not self.config.state_diffusion.enable):
