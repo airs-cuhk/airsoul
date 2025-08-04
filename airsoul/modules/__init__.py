@@ -11,4 +11,3 @@ from .blockrec_wrapper import BlockRecurrentWrapper
 from .causal_proxy import CausalBlock
 from .gsa import GLABlock, GSABlock
 from .rwkv6 import RWKV6Layer
-from .rwkv7 import RWKV7Layer

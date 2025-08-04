@@ -49,6 +49,7 @@ class LMEpoch:
             loss = self.model.module.perplexity(
                     fea, lab,
                     use_loss_weight=self.is_training,
+                    is_training=self.is_training,
                     reduce_dim=self.reduce) # Do not use loss weight for evaluation
             losses.append(loss)
             if(self.is_training):

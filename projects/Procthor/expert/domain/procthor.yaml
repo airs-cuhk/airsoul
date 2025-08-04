@@ -1,0 +1,20 @@
+name: procthor
+target_object_types:
+  - AlarmClock
+  - Apple
+  - BaseballBat
+  - BasketBall
+  - Bed
+  - Bowl
+  - Chair
+  - GarbageCan
+  - HousePlant
+  - Laptop
+  - Mug
+  - Sofa
+  - SprayBottle
+  - Television
+  - Toilet
+  - Vase
+
+num_houses: 100

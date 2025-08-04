@@ -1,5 +1,6 @@
 import torch.nn as nn
 from torch.nn import functional as F
+import torch
 
 """
 Wraps Self-Attention, Mamba etc with a Residual Connection and FeedForward to form a Transformer-like structure
@@ -17,6 +18,7 @@ class BlockWrapper(nn.Module):
 
         self.linear1 = nn.Linear(hidden, fc_hidden)
         self.dropout = nn.Dropout(fc_dropout)
+
         self.linear2 = nn.Linear(fc_hidden, hidden)
 
         self.norm1 = nn.LayerNorm(hidden, eps=1.0e-5)
@@ -31,7 +33,7 @@ class BlockWrapper(nn.Module):
         outputs, cache = self.temporal_encoder(norm_src, cache=cache, need_cache=need_cache)
 
         outputs = outputs + src
-
+        # print(outputs)
         # FeedForward + Residual
         outputs = outputs + self.dropout(
                                 self.linear2(
@@ -63,6 +65,8 @@ class MultiBlocks(nn.Module):
             self.layers = nn.ModuleList(
                 [temporal_module(layer_idx=layer_idx, **kwargs) 
                     for layer_idx in range(self.num_layers)])
+        
+        self.o_list = []
 
     def forward(self, src, cache=None, need_cache=False, checkpoints_density=-1):
         # Residual Connection
@@ -72,24 +76,22 @@ class MultiBlocks(nn.Module):
             new_cache = None
 
         output = src
-
+        # self.o_list = []
         for i, layer in enumerate(self.layers):
             if(cache is None):
                 l_cache = None
             else:
                 l_cache = cache[i]
-                # For rwkv7, get v_first from the previous layer
-                if i>0 and isinstance(l_cache, tuple):
-                    new_l_cache = (l_cache[0], v_prev_layer)
-                    l_cache = new_l_cache
             output, n_cache = layer(output, cache=l_cache, need_cache=True)
-            if isinstance(l_cache, tuple):
-                v_prev_layer = n_cache[1]
+            # self.o_list.append(output)
             if(need_cache):
                 new_cache.append(n_cache)
-
+        # self.o_list = torch.stack(self.o_list, dim=0)
+    
         return output, new_cache
     
+    def get_o_list(self):
+        return self.o_list
 
 if __name__=='__main__':
     from .recursion import SimpleLSTM

@@ -134,7 +134,7 @@ def EpochManager(cls):
                 return
             
             acc_iter = 0
-
+            # print("device:", device, "device_type:", device_type)
             if(not hasattr(self.computer, 'compute')):
                 log_fatal("The computer object must have compute method.")
             if(self.config.has_attr("manual_sync")):
@@ -142,12 +142,15 @@ def EpochManager(cls):
             else:
                 manual_sync = False
             data_length = len(self.dataloader)
+            # print("Data length:", data_length)
             for batch_id, batch_data in enumerate(self.dataloader):
                 acc_iter += 1
-
+                # print("Batch id:", batch_id, "Data length:", data_length)
                 # Important: Must reset the model before segment iteration
                 self.model.module.reset()
+                # print("reset model in ", device)
                 if(self.is_training):
+                    # print("Training mode")
                     self.model.train()
                     self.optimizer.zero_grad()
                     with autocast(dtype=torch.bfloat16, enabled=self.config.use_amp, device_type=device_type):
@@ -185,19 +188,19 @@ def EpochManager(cls):
                         torch.save(self.model.state_dict(), save_model_path)
                     need_break = True
 
+                
                 if(not self.is_training):
                     log_progress((batch_id + 1) / data_length, on=self.main)
-
                 yield need_break
 
             # Save At Training Epoch End
             if(self.main and self.is_training):
+                print("-"*40, "Check current validity and save model for safe...")
                 check_model_validity(self.model.module)
                 save_model_path = model_path(self.config.save_model_path, epoch_id)
                 torch.save(self.model.state_dict(), save_model_path)
-
             yield True
-
+    
     return WrapperEpochManager
 
 def dist_process(rank, use_gpu, world_size, config, main_rank,
@@ -302,7 +305,7 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
             epoch += 1
             for train_object in train_list:
                 train_object._epoch_start(epoch)
-                for need_evaluate in train_object.run(epoch, device, device_type):                        
+                for need_evaluate in train_object.run(epoch, device, device_type):                   
                     if(need_evaluate):
                         evaluate_epoch(epoch)
                 train_object._epoch_end(epoch)

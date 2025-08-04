@@ -245,3 +245,51 @@ def check_model_validity(model, verbose=False, level=1):
 
     return (max_risk > level)
 
+def plotLongDemo(predictions, reals, save_path):
+    import os
+    import PIL.Image as Image
+    frame_count = 0
+    whole_ARimage = None
+    # To concatenate the whole images by 2xN 
+    
+    real = reals
+    icsl_predict = predictions
+    if isinstance(real, torch.Tensor):
+        real = real.detach().cpu().numpy()
+    if isinstance(icsl_predict, torch.Tensor):
+        icsl_predict = icsl_predict.detach().cpu().numpy()
+    if len(real.shape) == 3:
+        real = real.unsqueeze(0) # (H, W, C) to (1, H, W, C)
+    if len(icsl_predict.shape) == 3:
+        icsl_predict = icsl_predict.unsqueeze(0)
+
+    if len(real.shape) == 5:
+        real = real.squeeze(0) # (B, T, C, H, W) to (T, C, H, W)
+    if len(icsl_predict.shape) == 5:
+        icsl_predict = icsl_predict.squeeze(0)
+    N = icsl_predict.shape[0]
+    assert real.shape == icsl_predict.shape, f"Shape mismatch: {real.shape} vs {icsl_predict.shape}"
+    assert len(real.shape) == 4 and real.shape[1] == 3, f"Invalid shape: {real.shape}, expected (T, C, H, W)"
+    for i in range(N):
+        real_frames = real[i]
+        icsl_frames = icsl_predict[i]
+        # rotete the real_frames and icsl_frames by 90 degrees counterclockwise
+        real_frames = np.transpose(real_frames, (2, 1, 0)) # (C, H, W) to (H, W, C)
+        icsl_frames = np.transpose(icsl_frames, (2, 1, 0)) # (C, H, W) to (H, W, C)
+        rotated_real_frames = np.rot90(real_frames, 2, axes=(0, 1)) # (H, W, C) to (W, H, C)
+        rotated_icsl_frames = np.rot90(icsl_frames, 2, axes=(0, 1)) # (H, W, C) to (W, H, C)
+        # (H, W, C) 
+        concatenated_img = np.vstack((rotated_real_frames, rotated_icsl_frames))
+        img = np.clip(concatenated_img, 0, 255).astype(np.uint8)
+        ARimage = np.clip(img, 0, 255).astype(np.uint8)
+        # concatenate the ARimage and ARreal up and down
+        if frame_count == 0:
+            whole_ARimage = ARimage
+        else:
+            whole_ARimage = np.hstack((whole_ARimage, ARimage))
+        frame_count += 1
+    # use Image to save the image to PNG
+    img = Image.fromarray(whole_ARimage)
+    img.save(os.path.join(save_path))
+    print("Save the image to " + save_path)
+

@@ -1,0 +1,273 @@
+---
+run_name: YUXUAN-07-21-DEMO-Maze-15*15-decoder-DL-new-vae-WM-procthor-short-data
+master_port: "12461"
+
+# load_model_path: /pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/checkpoints-causal-decoder-wm-podaw-DL-new-vae-procthor-stage0/ckpt_20
+# load_model_path: /pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/checkpoints-causal-decoder-wm-podaw-DL-new-vae-procthor-policy-stage2/ckpt_20 # policy model with new VAE in Procthor
+# load_model_path: /pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/checkpoints-causal-decoder-wm-podaw-DL-new-vae-policy-stage1/ckpt_06 # the decoder PM with new WM - continue training 
+load_model_path: /pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/checkpoints-causal-decoder-wm-podaw-DL-new-vae-stage1-continue/ckpt_02 # new version of DL WM
+# load_model_path: /pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/A-checkpoints-causal-decoder-sample-wm-podaw-HL-stage0/ckpt_06/ # The decoder WM of HL
+# load_model_path: "/pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/A-checkpoints-causal-decoder-sample-wm-podaw-stage01/ckpt_11/" # The decoder WM of DL
+# load_model_path: /pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/A-checkpoints-causal-decoder-sample-wm-podaw-HS-stage0/ckpt_02 # The decoder WM of HS
+# load_model_path: /pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/A-checkpoints-causal-decoder-sample-wm-podaw-DS-stage0/ckpt_02 # The decoder WM of DS
+# load_model_path: /pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/A-checkpoints-causal-decoder-finetune-podawDS-procthor-stage000/ckpt_10 # The decoder WM of DS finetuned with Procthor
+# load_model_path: /pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/A-checkpoints-causal-decoder-sample-wm-podaw-DS-stage0-backup/ckpt_01 # The decoder WM of DS
+# load_model_path: /pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/A-checkpoints-causal-decoder-sample-wm-podaw-HL-stage0/ckpt_04/ # The decoder WM of HL 04 check point
+
+
+# "./train-record/A-checkpoints-causal-decoder-finetune-podaw-procthor-stage000/ckpt_18"
+# "/pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/A-checkpoints-causal-decoder-finetune-podaw-procthor-stage02/ckpt_20" # Overfitting Procthor finetuned
+# "/pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/A-checkpoints-causal-decoder-sample-wm-podaw-stage01/ckpt_11/" # The decoder WM of DL
+# "/pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/train-record/A-checkpoints-causal-diffusion-sample-wm-podaw-stage1/ckpt_02/"
+# load_model_path: "/pfs/pfs-r36Cge/zsj/foundation_model_new/checkpoints-vae-pro-6/ckpt_70/"  # cold start with new VAE trained by Maze and Prochor Thor
+
+#load_model_parameter_blacklist : ["decision_model"]
+
+log_config:
+  use_tensorboard: True
+  tensorboard_log: "./generator-record/CacheMaze-15*15-decoder-test-podaw/"
+  evaluation_log: "./generator-record/CacheMaze-15*15-decoder-test-podaw/evaluation.log"
+  log_file: "./generator-record/CacheMaze-15*15-decoder-test-podaw/generate.log"
+
+model_config:
+  context_warmup: 1000
+  max_position_loss_weighting: 32000
+  vae_latent_size: 1024
+  action_dim: 16
+  policy_loss_type: CrossEntropy
+  
+  image_encoder_block:
+      img_size: 128
+      hidden_size: 1024
+      n_res_block: 2
+
+  image_decoder_block:
+      input_size: 1024
+      hidden_size: 1024
+      img_size: 128
+      n_res_block: 2
+
+  decision_block:
+    #   is_generate: True
+      rsa_type: podaw  #potar, otar, oar, oa
+      state_encode:
+          input_type: Continuous
+          input_size: 1024
+          hidden_size: 1024
+          dropout: 0.0
+
+      action_encode:
+          input_type: Discrete
+          input_size: 17
+          hidden_size: 1024
+          dropout: 0.0
+
+      prompt_encode:
+          input_type: Continuous
+          input_size: 768
+          hidden_size: 1024
+          dropout: 0.0
+          is_frozen: False
+
+      tag_encode:
+          input_type: Discrete
+          input_size: 8
+          hidden_size: 1024
+          dropout: 0.0
+          is_frozen: False
+
+      state_decode:
+          output_type: Continuous
+          input_size: 1024
+          hidden_size:
+              - 1024
+              - 1024
+          layer_norm: True
+          residual_connect: True
+          dropout: 0.0
+
+      action_decode:
+          output_type: Discrete
+          input_size: 1024
+          hidden_size:
+              - 1024
+              - 17
+          layer_norm: True
+          residual_connect: True
+          dropout: 0.0
+          
+          
+      action_diffusion:
+          enable: False
+          prediction_type: "sample" # epslion / sample /velocity
+          diffusion_model_name: "latentlm" # latentlm / basic
+          basic_model:
+            hidden_size: 1024
+            condition_size: 1024
+            t_embedding_size: 32
+            inner_hidden_size: 4096
+            cond_layer_norm: True
+            dropout: 0.1
+          latentlm:
+            hidden_size: 1024
+            block_size: 3
+            mlp_ratio: 4
+            dropout: 0.0
+          schedule: "cosine" # linear / cosine / scaled_linear
+          T: 20
+          beta: [0.0001, 0.02] # For linear / scaled_linear
+          inference_sample_steps: 20
+          eta: 1.0
+          need_clip: False # Set True if predict type is epslion or velocity
+          clip_threshold: 5.0
+  
+      state_diffusion:
+          enable: False
+          prediction_type: "sample" # epslion / sample / velocity
+          diffusion_model_name: "latentlm" # latentlm / basic
+          basic_model:
+            hidden_size: 1024
+            condition_size: 1024
+            t_embedding_size: 32
+            inner_hidden_size: 4096
+            cond_layer_norm: True
+            dropout: 0.1
+          latentlm:
+            hidden_size: 1024
+            block_size: 5
+            mlp_ratio: 6
+            dropout: 0.0
+          schedule: "cosine" # linear / cosine / scaled_linear
+          T: 20
+          beta: [0.0001, 0.02] # For linear / scaled_linear
+          inference_sample_steps: 20
+          eta: 1.0
+          need_clip: False # Set True if predict type is epslion or velocity
+          clip_threshold: 5.0
+
+      causal_block_trans:
+          model_type: TRANSFORMER
+          num_layers: 18
+          hidden_size: 1024
+          nhead: 32
+          inner_hidden_size: 1024
+          dropout: 0.10
+          context_window: -1
+          checkpoints_density: -1
+          position_encoding_size: 2048
+          use_layer_norm: True
+          use_blockrecurrence: True
+          memory_length: 1024
+          memory_type: KV
+          
+          
+      causal_block:
+          is_generate: True
+          model_type: GSA # GLA
+          num_layers: 18
+          hidden_size: 1024
+          inner_hidden_size: 1024
+          dropout: 0.10
+          nhead: 32
+          memory_length: 64
+          position_encoding_size: 2048
+          use_layer_norm: True
+          gate_bound: 22
+          use_blockrecurrence: True
+          checkpoints_density: -1
+          memory_type: MEM
+
+              
+# train_config:
+#     max_epochs: 20
+#     batch_size_vae: 1
+#     batch_size_causal: 1
+#     epoch_vae_stop: 1
+#     epoch_causal_start: -1
+#     manual_sync: True
+
+#     seq_len_vae: 300
+#     seq_len_causal: 10000
+#     seg_len_vae: 300
+#     seg_len_causal: 1000
+
+#     lr_vae: 9.0e-5
+#     lr_causal: 2.0e-4
+#     lr_vae_decay_interval: 200000
+#     lr_causal_decay_interval: 10000
+#     lr_vae_start_step: 200000
+#     lr_causal_start_step: 10000
+
+#     data_path: "/pfs/pfs-r36Cge/zsj/yuxuan/data/maze_A15_train/"
+#     save_model_path: "./train-record/A-checkpoints-causal-diffusion-sample-wm-podaw-stage0/"
+#     max_save_iterations: 1000
+
+#     lossweight_policymodel: 0 # 0.01
+#     lossweight_worldmodel_raw: 0.9 # 0.9
+#     lossweight_worldmodel_latent: 0.09 # 0.09
+#     lossweight_l2: 1.0e-6
+
+#     use_amp: False
+#     use_scaler: False
+
+#     sigma_scheduler: 1000
+#     sigma_value:
+#         - 0.0
+#         - 0.01
+#         - 0.05
+
+#     lambda_scheduler: 1000
+#     lambda_value:
+#         - 0.0
+#         - 1.0e-8
+#         - 1.0e-7
+
+# test_config:
+#     batch_size_vae: 1
+#     batch_size_causal: 1
+#     data_path: "/pfs/pfs-r36Cge/qxg/datasets/procthor/train_trajectory_wm/003"
+#     # /pfs/pfs-r36Cge/zsj/yuxuan/data/maze_15_train/
+#     # "/pfs/pfs-r36Cge/zsj/yuxuan/data/maze_15_test/"
+#     epoch_vae_stop: 1
+#     epoch_causal_start: -1
+
+#     seq_len_vae: 300
+#     seq_len_causal: 10000
+#     seg_len_vae: 300
+#     seg_len_causal: 1000
+
+#     is_visualize: True
+#     output: ./results15*15-diffusion-wm-podaw-test-set/
+
+generator_config:
+
+    pred_len: 1 # autoregressive length
+    start_position: 0 # start position
+    end_position: 9900 # end position
+    record_interval: 1
+
+    temp: 0.1 
+    drop_out: 0.2
+
+
+    output_root: "/pfs/pfs-r36Cge/zsj/yuxuan/airsoul-diffusion/07-21-new-WM-DL-10000/"
+    data_path: ["/pfs/pfs-r36Cge/zsj/yuxuan/data/maze_15_test1/"]
+    max_maze: 32
+    
+    learning_steps: 0
+    online_steps: 10000
+
+    seq_len: 10000
+    seq_len_causal: 10000
+    
+    max_steps: 5000
+    max_trails: 1
+    max_total_steps: 5000
+    agent_num: 1
+    epoch_numbers: 1
+
+    decoding_strategy:
+        T_ini: 1.0
+        T_fin: 0.1
+        T_step: 2000
+        decay_type: Linear  # Exponential

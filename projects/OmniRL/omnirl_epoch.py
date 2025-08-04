@@ -20,7 +20,7 @@ from pathlib import Path
 import random
 import re
 from airsoul.utils import AgentVisualizer
-from online_rl_utils import DiscreteEnvWrapper, OnlineRL, LoadRLModel, Switch2
+from online_rl_utils import DiscreteEnvWrapper, OnlineRL, Switch2
 from gymnasium.envs.toy_text.frozen_lake import generate_random_map
 from l3c.anymdp import AnyMDPTaskSampler
 from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
@@ -551,12 +551,26 @@ class OmniRLGenerator(GeneratorBase):
         print("Finish Learning.")
 
     def benchmark(self, epoch_id):
-        if self.config.run_benchmark.run_opt:
-            trained_rl = LoadRLModel(self.env, 
-                                    self.config.env, 
-                                    model_name=self.config.benchmark_model_name,
-                                    model_path=self.config.benchmark_model_save_path)
-            self.benchmark_opt_model = trained_rl()
+        supported_gym_env = ["lake", "lander", "mountaincar", "pendulum", "cliff"]
+        # Load opt model
+        if self.config.env.lower().find("anymdp") >= 0:
+            model = AnyMDPSolverOpt(self.env)
+            def benchmark_model(state):
+                return model.policy(state)
+            self.benchmark_opt_model = benchmark_model
+        elif any(self.config.env.lower().find(name) == 0 for name in supported_gym_env):
+            if self.config.run_benchmark.run_opt:
+                model_classes = {'dqn': DQN, 'a24': A2C, 'td3': TD3, 'ppo': PPO}
+                model_name = self.config.benchmark_model_name.lower()
+                if model_name not in model_classes:
+                    raise ValueError("Unknown policy type: {}".format())
+                model = model_classes[model_name].load(f'{self.config.benchmark_model_save_path}/model/{model_name}.zip', env=self.env)
+                def benchmark_model(state):
+                    action, _ = model.predict(state)
+                    return int(action)
+                self.benchmark_opt_model = benchmark_model
+        else:
+            raise ValueError("Unsupported environment:", self.config.env)
         
         def run_online_rl():
             online_rl = OnlineRL(env=self.env, 
@@ -804,19 +818,12 @@ class OmniRLGenerator(GeneratorBase):
 
 
                 # start learning     
-                cache = self.model.module.in_context_learn(
+                self.model.module.in_context_learn(
                     previous_state,
                     interactive_prompt,
                     self.interactive_tag,
                     action,
                     shaped_reward)
-                
-                if (hasattr(self.config, 'save_cache') 
-                    and self.config.save_cache 
-                    and (total_step + step) % self.config.save_cache_gap == 0):
-                    epoch_dir = os.path.join(self.config.save_cache_path, str(epoch_id)) 
-                    os.makedirs(epoch_dir, exist_ok=True)
-                    numpy.save(os.path.join(epoch_dir, f"cache_{total_step + step}.npy"), cache)
 
                 trail_state_arr.append(new_state)
                 obs_arr.append(new_state) 
@@ -883,8 +890,7 @@ class OmniRLGenerator(GeneratorBase):
         # Save step reward
         if self.max_total_steps > 1.0:
             array_to_save = numpy.array(rew_wo_done_arr)
-            if self.step_reward_nomalize_factor is not None:
-                array_to_save = array_to_save * self.step_reward_nomalize_factor + self.step_reward_nomalize_constant
+            array_to_save = array_to_save * self.step_reward_nomalize_factor + self.step_reward_nomalize_constant
             file_path = f'{self.config.output}/step_reward/'
             if not os.path.exists(file_path):
                 os.makedirs(file_path)

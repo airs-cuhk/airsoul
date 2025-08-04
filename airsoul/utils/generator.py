@@ -113,6 +113,7 @@ def dist_generator(rank, use_gpu, world_size, config, main_rank,
                                 main=main,
                                 extra_info=extra_info)
     else:
+        
         generator=generator_class(run_name=config.run_name, 
                                 model=models, 
                                 config=config.generator_config,
@@ -131,7 +132,7 @@ def dist_generator(rank, use_gpu, world_size, config, main_rank,
         for model_idx in range(model_num):
             models[model_idx].module.reset()
             models[model_idx].eval()
-        generator(epoch_id)
+        generator(epoch_id, rank)
         generator.epoch_end(epoch_id)
         log_debug(f"... GPU {rank} finishes processing epoch {epoch_id}")
     generator.postprocess()
@@ -151,5 +152,5 @@ class GeneratorRunner(Runner):
                       model_type,
                       generator_class,
                       extra_info),
-                nprocs=self.world_size if self.use_gpu else min(self.world_size, 4),  # Limit CPU processes if desired
+                nprocs=self.world_size if self.use_gpu else min(self.world_size, 8),  # Limit CPU processes if desired
                 join=True)
