@@ -10,7 +10,7 @@ from gym.envs.toy_text.frozen_lake import generate_random_map
 from stable_baselines3 import DQN, A2C, TD3, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-from airsoul.utils import DiscreteEnvWrapper
+from projects.OmniRL.gym_env_wapper import DiscreteEnvWrapper, DarkroomEnv
 
 def create_directory(directory_path):
     if not os.path.exists(directory_path):
@@ -66,6 +66,11 @@ def create_env(args):
                                     state_space_dim1=state_space_dim1,
                                     state_space_dim2=state_space_dim2,
                                     reward_shaping=True)
+        return env
+    elif(args.env_name.lower().find("darkroom") >= 0):
+        state_space_dim, _ = extract_state_space_dimensions(args.env_name.lower(), "darkroom")
+        goal = np.array([state_space_dim - 1, state_space_dim - 1])
+        env = DarkroomEnv(state_space_dim, args.n_max_steps, goal=goal)
         return env
     else:
         raise ValueError("Unknown env name: {}".format(args.env_name))
@@ -147,6 +152,8 @@ def produce_data(args, worker_id, shared_list, seg_len):
                     shaped_reward = -1.0
                 else:
                     shaped_reward = -0.03
+            elif args.env_name.lower().find("darkroom") >=0:
+                shaped_reward = reward
 
             # Record state, action, and reward
             state_list.append(state)  # Append current state

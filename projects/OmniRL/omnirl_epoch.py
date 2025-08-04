@@ -20,12 +20,10 @@ from pathlib import Path
 import random
 import re
 from airsoul.utils import AgentVisualizer
-from online_rl_utils import DiscreteEnvWrapper, OnlineRL, Switch2
+from online_rl_utils import OnlineRL, LoadRLModel
+from gym_env_wapper import DiscreteEnvWrapper, Switch2, DarkroomEnv
 from gymnasium.envs.toy_text.frozen_lake import generate_random_map
-from l3c.anymdp import AnyMDPTaskSampler
-from l3c.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
-from l3c.anymdp.solver import get_final_transition, get_final_reward
-from stable_baselines3 import DQN, A2C, TD3, PPO
+from xenoverse.anymdp import AnyMDPTaskSampler
 
 
 def string_mean_var(downsample_length, res):
@@ -42,7 +40,7 @@ class OmniRLEpoch:
     def __init__(self, **kwargs):
         for key in kwargs:
             setattr(self, key, kwargs[key])
-        self.DataType=AnyMDPv2DataSet #AnyMDPDataSet
+        self.DataType=AnyMDPDataSet #AnyMDPDataSet
         if(self.is_training):
             self.logger_keys = ["learning_rate", 
                         "loss_worldmodel_state", 
@@ -183,7 +181,7 @@ class OmniRLGenerator(GeneratorBase):
         elif(self.config.env.lower().find("cliff") >= 0):
             self.task_sampler = self.task_sampler_cliff
         elif(self.config.env.lower().find("anymdp") >= 0):
-            self.env = gym.make("anymdp-v0", max_steps=self.max_steps)
+            self.env = gymnasium.make("anymdp-v0", max_steps=self.max_steps)
             self.task_sampler = self.task_sampler_anymdp
             if self.config.mult_anymdp_task:
                 self.mult_anymdp_task = True
@@ -195,6 +193,8 @@ class OmniRLGenerator(GeneratorBase):
             self.task_sampler = self.task_sampler_pendulum
         elif(self.config.env.lower().find("switch") >= 0):
             self.task_sampler = self.task_sampler_switch
+        elif(self.config.env.lower().find("darkroom") >= 0):
+            self.task_sampler = self.task_sampler_darkroom
         else:
             log_fatal("Unsupported environment:", self.config.env)
 
@@ -227,6 +227,9 @@ class OmniRLGenerator(GeneratorBase):
                             *benchmark_logger_keys, 
                             on=self.main, 
                             use_tensorboard=False)
+    
+    def epoch_end(self, epoch_id):
+        pass
 
     def task_sampler_anymdp(self, epoch_id=0):
         task_id = None
@@ -303,6 +306,12 @@ class OmniRLGenerator(GeneratorBase):
 
     def task_sampler_switch(self, epoch_id=0):
         self.env = Switch2(n_agents=2, full_observable=True, max_steps=self.config.max_steps)
+        return None
+
+    def task_sampler_darkroom(self, epoch_id=0):
+        state_space_dim, _ = self.extract_state_space_dimensions(self.config.env.lower(), "darkroom")
+        goal = numpy.array([state_space_dim - 1, state_space_dim - 1])
+        self.env = DarkroomEnv(state_space_dim,self.config.max_steps, goal=goal)
         return None
 
     def reward_shaping(self, done, terminated, reward):
@@ -466,6 +475,7 @@ class OmniRLGenerator(GeneratorBase):
         return True
     
     def get_exp_q(self):
+        from xenoverse.anymdp.solver import get_final_transition, get_final_reward
         t_mat = get_final_transition(
             transition=self.env.transition_matrix,
             reset_states=self.env.reset_states,
@@ -551,26 +561,12 @@ class OmniRLGenerator(GeneratorBase):
         print("Finish Learning.")
 
     def benchmark(self, epoch_id):
-        supported_gym_env = ["lake", "lander", "mountaincar", "pendulum", "cliff"]
-        # Load opt model
-        if self.config.env.lower().find("anymdp") >= 0:
-            model = AnyMDPSolverOpt(self.env)
-            def benchmark_model(state):
-                return model.policy(state)
-            self.benchmark_opt_model = benchmark_model
-        elif any(self.config.env.lower().find(name) == 0 for name in supported_gym_env):
-            if self.config.run_benchmark.run_opt:
-                model_classes = {'dqn': DQN, 'a24': A2C, 'td3': TD3, 'ppo': PPO}
-                model_name = self.config.benchmark_model_name.lower()
-                if model_name not in model_classes:
-                    raise ValueError("Unknown policy type: {}".format())
-                model = model_classes[model_name].load(f'{self.config.benchmark_model_save_path}/model/{model_name}.zip', env=self.env)
-                def benchmark_model(state):
-                    action, _ = model.predict(state)
-                    return int(action)
-                self.benchmark_opt_model = benchmark_model
-        else:
-            raise ValueError("Unsupported environment:", self.config.env)
+        if self.config.run_benchmark.run_opt:
+            trained_rl = LoadRLModel(self.env, 
+                                    self.config.env, 
+                                    model_name=self.config.benchmark_model_name,
+                                    model_path=self.config.benchmark_model_save_path)
+            self.benchmark_opt_model = trained_rl()
         
         def run_online_rl():
             online_rl = OnlineRL(env=self.env, 
@@ -579,7 +575,12 @@ class OmniRLGenerator(GeneratorBase):
                                  max_trails=self.config.max_trails,
                                  max_steps=self.config.max_steps,
                                  downsample_trail=self.config.downsample_trail)
-            rew_stat, step_trail, success_rate = online_rl()
+            if self.config.benchmark_model_name.lower() == "cql" and  self.config.learn_from_data:
+                rew_stat, step_trail, success_rate = online_rl(offline_learning=True, 
+                                                               offline_learning_path = self.config.data_root,
+                                                               episode_end_prompt = 7)
+            else:
+                rew_stat, step_trail, success_rate = online_rl()
             ds_step_trail = downsample(step_trail, self.config.downsample_trail)
             ds_rewards = downsample(rew_stat, self.config.downsample_trail)
             ds_success = downsample(success_rate, self.config.downsample_trail)
@@ -611,11 +612,8 @@ class OmniRLGenerator(GeneratorBase):
                 while not done:
                     action= benchmark_model(new_state)
                     new_state, new_reward, terminated, truncated, *_ = self.env.step(action)
-                    if self.config.env.lower().find("anymdp") >= 0:
-                        done = terminated
-                    else:
-                        if terminated or truncated:
-                            done = True
+                    if terminated or truncated:
+                        done = True
                     shaped_reward = self.reward_shaping(done, terminated, new_reward)
                     trail_reward += new_reward
 
@@ -721,7 +719,7 @@ class OmniRLGenerator(GeneratorBase):
 
         if self.mult_anymdp_task:
             skip_task = not self.nomalize_anymdp_reward(task_id)
-            self.get_exp_q()
+            # self.get_exp_q()
             if skip_task:
                 print("Skip task: ", task_id)
                 return
@@ -818,12 +816,19 @@ class OmniRLGenerator(GeneratorBase):
 
 
                 # start learning     
-                self.model.module.in_context_learn(
+                cache = self.model.module.in_context_learn(
                     previous_state,
                     interactive_prompt,
                     self.interactive_tag,
                     action,
                     shaped_reward)
+                
+                if (hasattr(self.config, 'save_cache') 
+                    and self.config.save_cache 
+                    and (total_step + step) % self.config.save_cache_gap == 0):
+                    epoch_dir = os.path.join(self.config.save_cache_path, str(epoch_id)) 
+                    os.makedirs(epoch_dir, exist_ok=True)
+                    numpy.save(os.path.join(epoch_dir, f"cache_{total_step + step}.npy"), cache)
 
                 trail_state_arr.append(new_state)
                 obs_arr.append(new_state) 
@@ -890,7 +895,8 @@ class OmniRLGenerator(GeneratorBase):
         # Save step reward
         if self.max_total_steps > 1.0:
             array_to_save = numpy.array(rew_wo_done_arr)
-            array_to_save = array_to_save * self.step_reward_nomalize_factor + self.step_reward_nomalize_constant
+            if self.step_reward_nomalize_factor is not None:
+                array_to_save = array_to_save * self.step_reward_nomalize_factor + self.step_reward_nomalize_constant
             file_path = f'{self.config.output}/step_reward/'
             if not os.path.exists(file_path):
                 os.makedirs(file_path)

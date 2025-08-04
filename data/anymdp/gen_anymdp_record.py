@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding=utf8
 # File: dump_maze.py
-import gym
+import gymnasium as gym
 import sys
 import os
 import time
@@ -24,13 +24,36 @@ if current_folder not in sys.path:
     sys.path.append(current_folder)
 from data.anymdp.anymdp_behavior_solver import AnyPolicySolver, AnyMDPOptNoiseDistiller, AnyMDPOTSOpter, AnyMDPQNoiseDistiller, AnyMDPOTSNoiseDistiller, AnyMDPOpter
 
+def check_reward(env, opt_slover, rnd_solver):
+    def get_reward(env, policy):
+        episode_rewards = 0
+        max_episode_num = 10
+        for i in range(max_episode_num):
+            state, info = env.reset()
+            done = False
+            episode_reward = 0
+            step = 0
+            while not done:
+                action, _ = policy(state)
+                state, reward, terminated, truncated, info = env.step(action)
+                episode_reward += reward
+                step += 1
+                done = terminated or truncated
+                if done:
+                    episode_rewards += episode_reward
+        return episode_rewards / max_episode_num
 
+    opt_reward = get_reward(env, opt_slover.policy)
+    rnd_reward = get_reward(env, rnd_solver.policy)
+    need_resample = opt_reward < rnd_reward
+    return need_resample
 
 def run_epoch(
         epoch_id,
         env,
         max_steps,
         offpolicy_labeling = True,
+        task_from_file=None,
         ):
     # Must intialize agent after reset
     steps = 0
@@ -69,11 +92,19 @@ def run_epoch(
                      (solveropt1, 0.02),    #opt1, 1
                      (solveropt2, 0.03),    #opt2, 2
                      (solveropt3, 0.05)]    #opt3, 3
-    reference_dict = [(solveropt0, 0.10),   #opt0, 0
-                      (solveropt1, 0.10),   #opt1, 1
-                      (solveropt2, 0.20),   #opt2, 2
-                      (solveropt3, 0.60)]   #opt3, 3
+    reference_dict = [(solveropt0, 0.0),   #opt0, 0
+                      (solveropt1, 0.0),   #opt1, 1
+                      (solveropt2, 0.0),   #opt2, 2
+                      (solveropt3, 1.0)]   #opt3, 3
     
+    # Check opt avg reward > random avg reward
+    if task_from_file is None:
+        need_resample = check_reward(env, solveropt3, solverneg)
+        if(need_resample):
+            return {}, need_resample
+    else:
+        need_resample = False
+
     # Policy Sampler
     blist, bprob = zip(*behavior_dict)
     rlist, rprob = zip(*reference_dict)
@@ -127,7 +158,8 @@ def run_epoch(
             lact = bact
             prompt = bact_type
 
-        next_state, reward, done, info = env.step(bact)
+        next_state, reward, terminated, truncated, info = env.step(bact)
+        done = terminated or truncated
         if(mask_all_tag or mask_epoch_tag):
             bact_type = tag_mapping_id['unk']
 
@@ -137,7 +169,7 @@ def run_epoch(
         mse_sum.append(mse)
 
         for solver, _ in behavior_dict:
-            solver.learner(state, bact, next_state, reward, done)
+            solver.learner(state, bact, next_state, reward, terminated, truncated)
 
         state_list.append(state)
         bact_list.append(bact)
@@ -173,7 +205,7 @@ def run_epoch(
             "actions_behavior": numpy.array(bact_list, dtype=numpy.uint32),
             "rewards": numpy.array(reward_list, dtype=numpy.float32),
             "actions_label": numpy.array(lact_list, dtype=numpy.uint32),
-            }
+            }, need_resample
 
 def create_directory(directory_path):
     if not os.path.exists(directory_path):
@@ -187,18 +219,19 @@ def dump_anymdp(work_id, world_work, path_name, epoch_ids, nstates, nactions, mi
     if(tasks_from_file is not None):
         tasks_num = len(tasks_from_file)
     for idx in epoch_ids:
-        env = gym.make("anymdp-v0", max_steps=max_steps)
-
-        if(tasks_from_file is not None):
-            # Resample the start position and commands sequence from certain tasks
-            task_id = (work_id + idx * world_work) % tasks_num
-            task = tasks_from_file[task_id]
-        else:
-            task = AnyMDPTaskSampler(nstates, nactions, min_state_space)
-
-        env.set_task(task)
-        results = run_epoch(idx, env, max_steps, offpolicy_labeling=is_offpolicy_labeling)
-
+        # Notice: "need_resample = False" when load tasks from file
+        need_resample = True
+        while need_resample:
+            env = gym.make("anymdp-v0", max_steps=max_steps)
+            if(tasks_from_file is not None):
+                # Resample the start position and commands sequence from certain tasks
+                task_id = (work_id + idx * world_work) % tasks_num
+                task = tasks_from_file[task_id]
+            else:
+                task = AnyMDPTaskSampler(nstates, nactions, min_state_space)
+            env.set_task(task)
+            results, need_resample = run_epoch(idx, env, max_steps, offpolicy_labeling=is_offpolicy_labeling, task_from_file=tasks_from_file)
+        
         file_path = f'{path_name}/record-{idx:06d}'
         create_directory(file_path)
 

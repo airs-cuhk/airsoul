@@ -12,7 +12,7 @@ import pickle
 import random as rnd
 from numpy import random
 from airsoul.utils import tag_vocabulary, tag_mapping_gamma, tag_mapping_id
-from xenoverse.anymdp import AnyMDPSolverOpt, AnyMDPSolverOTS, AnyMDPSolverQ
+from xenoverse.anymdp import AnyMDPSolverOpt, AnyMDPSolverMBRL, AnyMDPSolverQ
 from xenoverse.utils import pseudo_random_seed
 
 
@@ -59,24 +59,21 @@ class AnyMDPOptNoiseDistiller(object):
             action, act_type = self.opt_solver.policy(state)
         return action, act_type
 
-class AnyMDPOTSNoiseDistiller(AnyMDPSolverOTS):
+class AnyMDPOTSNoiseDistiller(AnyMDPSolverMBRL):
     def __init__(self, env, 
                  max_steps=16000):
         if(random.random() < 0.5):
             c = 0.005
-            alpha = 0.01
             gamma = random.uniform(0.90, 0.99)
             self.noise = 0.0
         else:
             c = 0.005 * random.exponential(1.0)
-            alpha = 0.01 * random.exponential(1.0)
             max_steps = random.uniform(100, max_steps)
             gamma = 0.99
             self.noise = random.uniform(0.1, 0.5)
         super().__init__(env, 
                         gamma=gamma,
                         c=c,
-                        alpha=alpha,
                         max_steps=max_steps)
         self.nstate = env.observation_space.n
         self.naction = env.action_space.n
@@ -99,19 +96,16 @@ class AnyMDPQNoiseDistiller(AnyMDPSolverQ):
     def __init__(self, env, 
                  max_steps=16000):
         if(random.random() < 0.5):
-            c = 0.005
             alpha = 0.01
             gamma = random.uniform(0.90, 0.99)
             self.noise = 0.0
         else:
-            c = 0.005 * random.exponential(1.0)
             alpha = 0.01 * random.exponential(1.0)
             max_steps = random.uniform(100, max_steps)
             gamma = 0.99
             self.noise = random.uniform(0.1, 0.5)
         super().__init__(env, 
                         gamma=gamma,
-                        c=c,
                         alpha=alpha,
                         max_steps=max_steps)
         self.nstate = env.observation_space.n
@@ -131,13 +125,12 @@ class AnyMDPQNoiseDistiller(AnyMDPSolverQ):
             act_type = tag_mapping_id['exp2']
         return action, act_type
     
-class AnyMDPOTSOpter(AnyMDPSolverOTS):
+class AnyMDPOTSOpter(AnyMDPSolverMBRL):
     def __init__(self, env, solver_opt=None,
                  max_steps=16000):
         super().__init__(env, 
                         gamma=0.99,
                         c=0.005,
-                        alpha=0.01,
                         max_steps=max_steps)
         self.nstate = env.observation_space.n
         self.naction = env.action_space.n

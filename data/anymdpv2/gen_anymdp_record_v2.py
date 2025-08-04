@@ -4,7 +4,7 @@ import numpy as np
 import random
 import torch
 import multiprocessing
-from l3c.anymdpv2 import AnyMDPv2TaskSampler, AnyMDPEnv
+from xenoverse.anymdpv2 import AnyMDPv2TaskSampler, AnyMDPEnv
 from tag_vocab import tag_mapping_id
 from stable_baselines3 import SAC, PPO
 from sb3_contrib import RecurrentPPO

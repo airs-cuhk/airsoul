@@ -1,251 +1,150 @@
+import os
 import numpy
-import gymnasium
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3 import A2C, PPO, DQN, TD3
-from ma_gym.envs.switch import Switch
+from xenoverse.anymdp import AnyMDPSolverOpt, AnyMDPSolverQ
+# For QLearning class
+from gymnasium import spaces
+from stable_baselines3.common.base_class import BaseAlgorithm
+from stable_baselines3.common.type_aliases import GymEnv, Schedule
+from stable_baselines3.common.utils import get_schedule_fn
+from typing import Optional, Tuple, Union
+# For CQL
+from cql import CQL
 
-class MapStateToDiscrete:
-    def __init__(self, env_name, state_space_dim1, state_space_dim2):
-        self.env_name = env_name.lower()
-        self.state_space_dim1 = state_space_dim1
-        self.state_space_dim2 = state_space_dim2
-        
-        if self.env_name.find("pendulum") >= 0:
-            self.map_state_to_discrete_func = self._map_state_to_discrete_pendulum
-        elif self.env_name.find("mountaincar") >= 0:
-            self.map_state_to_discrete_func = self._map_state_to_discrete_mountaincar
-        else:
-            self.map_state_to_discrete_func = self._map_state_to_discrete_default # return origin state
-    
-    def map_to_discrete(self, value, min_val, max_val, n_interval):
-        """
-        Maps a continuous value to a discrete integer.
+class QLearning(BaseAlgorithm):
+    """
+    The QLearning algorithm is implemented by inheriting the base class of stable_baselines3 
+    to ensure consistent logging format. Uses AnyMDPSolverQ methods for Q-learning.
+    """
 
-        Parameters:
-        value (float): The continuous value to be mapped.
-        min_val (float): The minimum value of the continuous range.
-        max_val (float): The maximum value of the continuous range.
-        n_interval (int): The number of intervals.
+    def __init__(
+        self,
+        env: GymEnv,
+        gamma: float = 0.99,
+        alpha: float = 0.01,
+        c: float = 0.01,
+        max_steps: int = 4000,
+        tensorboard_log: Optional[str] = None,
+        verbose: int = 0,
+        _init_setup_model: bool = True,
+    ):
+        # Verify environment type 
+        assert isinstance(env.observation_space, spaces.Discrete), "Requires a discrete state space."
+        assert isinstance(env.action_space, spaces.Discrete), "Requires a discrete action space."
 
-        Returns:
-        int: The mapped discrete integer [0, n_interval - 1].
-        """
-        # Create bin edges
-        bins = numpy.linspace(min_val, max_val, n_interval + 1)
-        
-        # Clip the value within the range [min_val, max_val]
-        clipped_value = numpy.clip(value, min_val, max_val)
-        
-        # Digitize the clipped value to get the discrete integer
-        discrete_value = numpy.digitize(clipped_value, bins) - 1
-        
-        # Ensure the discrete value is within the range [0, num_bins-1]
-        return numpy.clip(discrete_value, 0, n_interval - 1)
-    
-    def _map_state_to_discrete_pendulum(self, state):
-        """
-        Maps a state array to a discrete integer for Pendulum-v1.
+        # Initialize AnyMDPSolverQ
+        self.solver = AnyMDPSolverQ(env, gamma=gamma, alpha=alpha, c=c, max_steps=max_steps)
 
-        Parameters:
-        state (numpy.ndarray): An array containing cos(theta), sin(theta), and speed.
+        # Call base class init
+        super().__init__(
+            policy=None,
+            env=env,
+            learning_rate=1.0,  # Virtual value, the actual learning rate is managed by AnyMDPSolverQ
+            tensorboard_log=tensorboard_log,
+            verbose=verbose,
+            supported_action_spaces=(spaces.Discrete,),
+            support_multi_env=False,
+        )
 
-        Returns:
-        int: The discretized state integer.
-        """
-        # Extract cos_theta and sin_theta
-        cos_theta = state[0]
-        sin_theta = state[1]
-        
-        # Calculate theta using atan2 to get the correct quadrant
-        theta = numpy.arctan2(sin_theta, cos_theta)
-        
-        # Map theta from [-pi, pi] to [0, 2*pi]
-        if theta < 0:
-            theta += 2 * numpy.pi
-        
-        # Define the range and number of intervals for theta
-        theta_min, theta_max = 0, 2 * numpy.pi
-        n_interval_theta = self.state_space_dim1
-        
-        # Use the helper function to map theta
-        theta_discrete = self.map_to_discrete(theta, theta_min, theta_max, n_interval_theta)
-        
-        # Define the range and number of intervals for speed
-        speed_min, speed_max = -8.0, 8.0
-        n_interval_speed = self.state_space_dim2
-        
-        # Use the helper function to map speed
-        speed_discrete = self.map_to_discrete(state[2], speed_min, speed_max, n_interval_speed)
-        
-        # Calculate the discretized state
-        state_discrete = n_interval_speed * theta_discrete + speed_discrete
-        
-        return state_discrete
-    
-    def _map_state_to_discrete_mountaincar(self, state):
-        """
-        Maps a state array to a discrete integer for MountainCar-v0.
+        if _init_setup_model:
+            self._setup_model()
 
-        Parameters:
-        state (numpy.ndarray): An array containing position and velocity.
+    def _setup_model(self) -> None:
+        """Virtual policy"""
+        self.policy = self  # Use self as policy to ensure consistency
 
-        Returns:
-        int: The discretized state integer.
-        """
-        # Define the ranges and number of intervals for position and velocity
-        position_min, position_max = -1.2, 0.6
-        n_interval_position = self.state_space_dim1
-        
-        velocity_min, velocity_max = -0.07, 0.07
-        n_interval_velocity = self.state_space_dim2
-        
-        # Use the helper function to map position and velocity
-        position_discrete = self.map_to_discrete(state[0], position_min, position_max, n_interval_position)
-        velocity_discrete = self.map_to_discrete(state[1], velocity_min, velocity_max, n_interval_velocity)
-        
-        # Calculate the discretized state
-        state_discrete = n_interval_velocity * position_discrete + velocity_discrete
-        
-        return state_discrete
-    
-    def _map_state_to_discrete_default(self, state):
-        return state
-    
-    def map_state_to_discrete(self, state):
-        """
-        Maps a state array to a discrete integer based on the environment.
+    def predict(
+        self,
+        observation: numpy.ndarray,
+        state: Optional[Tuple] = None,
+        episode_start: Optional[numpy.ndarray] = None,
+        deterministic: bool = False,
+    ) -> Tuple[numpy.ndarray, Optional[Tuple]]:
+        """Policy based on AnyMDPSolverQ"""
+        state_idx = observation.item()
+        action = self.solver.policy(state_idx)  # Use AnyMDPSolverQ's policy method
+        return numpy.array([action], dtype=numpy.int64), state
 
-        Parameters:
-        state (numpy.ndarray): An array containing the state variables of the environment.
+    def learn(
+        self,
+        total_timesteps: int,
+        callback: Optional[BaseCallback] = None,
+        log_interval: int = 100,
+        tb_log_name: str = "QLearning",
+        reset_num_timesteps: bool = True,
+        progress_bar: bool = False,
+    ) -> "QLearning":
+        total_timesteps, callback = self._setup_learn(
+            total_timesteps,
+            callback,
+            reset_num_timesteps,
+            tb_log_name,
+            progress_bar,
+        )
 
-        Returns:
-        int: The discretized state integer.
-        """
-        return self.map_state_to_discrete_func(state)
-    
-class MapActionToContinuous:
-    def __init__(self, env_name, distribution_type='linear'):
-        self.env_name = env_name.lower()
-        self.distribution_type = distribution_type
-        
-        if self.env_name.find("pendulum") >= 0:
-            self.map_action_to_continuous_func = self._map_action_to_continous_pendulum
-        else:
-            self.map_action_to_continuous_func = self._map_action_to_continous_default # return origin action
-    
-    def map_to_continuous(self, value, min_val, max_val, n_action):
-        """
-        Maps a discrete integer to a continuous value.
+        state = self.env.reset()
+        episode_reward = 0.0
 
-        Parameters:
-        value (int): The discrete integer to be mapped.
-        min_val (float): The minimum value of the continuous range.
-        max_val (float): The maximum value of the continuous range.
-        n_interval (int): The number of intervals.
-
-        Returns:
-        float: The mapped continuous value within the range [min_val, max_val].
-        """
-        # Calculate the step size for each interval
-        if n_action < 2:
-            raise ValueError(f"Invalid number of actions: {n_action}")
-        
-        if self.distribution_type == 'linear':
-            step_size = (max_val - min_val) / (n_action - 1)
-            continuous_value = min_val + value * step_size
-        elif self.distribution_type == 'sin':
-            # Map the discrete value to a normalized range [0, pi]
-            normalized_value = (value / (n_action - 1)) * numpy.pi
-            # Apply sine function and scale it to the desired range
-            continuous_value = min_val + ((numpy.sin(normalized_value) + 1) / 2) * (max_val - min_val)
-        else:
-            raise ValueError(f"Unsupported distribution type: {self.distribution_type}")
-        
-        return continuous_value
-    
-    def _map_action_to_continous_pendulum(self, action):
-        """
-        Maps a discrete action integer to a continuous action for Pendulum-v1.
-
-        Parameters:
-        action (int): A discrete action integer from 0 to n_action-1.
-
-        Returns:
-        float: The mapped continuous action value.
-        """
-        min_val, max_val = -2.0, 2.0
-        n_action = 5
-        
-        # Use the helper function to map action
-        continuous_action = self.map_to_continuous(action, min_val, max_val, n_action)
-        
-        return numpy.array([continuous_action])  
-    
-    def _map_action_to_continous_default(self, action):
-        return action
-    
-    def map_action_to_continuous(self, action):
-        """
-        Maps a discrete action integer to a continuous action based on the environment.
-
-        Parameters:
-        action (int): A discrete action integer from 0 to n_action-1.
-
-        Returns:
-        float: The mapped continuous action value.
-        """
-        return self.map_action_to_continuous_func(action)
-    
-class DiscreteEnvWrapper(gymnasium.Wrapper):
-    def __init__(self, env, env_name, action_space=5, state_space_dim1=8, state_space_dim2=8, reward_shaping = False, skip_frame=0):
-        super(DiscreteEnvWrapper, self).__init__(env)
-        self.env_name = env_name.lower()
-        self.action_space = gymnasium.spaces.Discrete(action_space)
-        self.observation_space = gymnasium.spaces.Discrete(state_space_dim1 * state_space_dim2)
-        self.reward_shaping = reward_shaping
-        self.skip_frame = skip_frame
-        self.map_state_to_discrete = MapStateToDiscrete(self.env_name, state_space_dim1, state_space_dim2).map_state_to_discrete
-        self.map_action_to_continuous = MapActionToContinuous(self.env_name).map_action_to_continuous
-
-    def reset(self, **kwargs):
-        continuous_state, info = self.env.reset(**kwargs)
-        discrete_state = self.map_state_to_discrete(continuous_state)
-        if self.env_name.lower().find("mountaincar") >= 0:
-            self.last_energy = 0.5*continuous_state[1]*continuous_state[1] + 0.0025*(numpy.sin(3*continuous_state[0])*0.45+0.55)
-            self.last_gamma_vel = 0.0
-        return discrete_state, info
-        
-    def step(self, discrete_action):
-        total_reward = 0.0
-        continuous_action = self.map_action_to_continuous(discrete_action)
-        for _ in range(self.skip_frame + 1):
-            continuous_state, reward, terminated, truncated, info = self.env.step(continuous_action)
-            if self.reward_shaping:
-                if self.env_name.lower().find("mountaincar") >= 0:
-                    energy = 0.5*continuous_state[1]*continuous_state[1] + 0.0025*(numpy.sin(3*continuous_state[0])*0.45+0.55)
-                    if energy > self.last_energy:
-                        reward = 0.01
-                    else:
-                        reward = -0.01
-                    gamma = 0.66
-                    reward = -0.01 + 10*(continuous_state[1]*continuous_state[1] + gamma * self.last_gamma_vel)
-                    self.last_gamma_vel = continuous_state[1]*continuous_state[1] + gamma * self.last_gamma_vel
-                    self.last_energy = energy
+        while self.num_timesteps < total_timesteps:
+            # Action choose and execute
+            action, _ = self.predict(state)
+            next_state, reward, terminated, truncated, *_ = self.env.step(action)
             
-            if self.env_name.lower().find("cliff") >= 0:
-                if reward < -50:
-                    truncated = True
+            terminated = terminated[0]
+            truncated = truncated[0]["TimeLimit.truncated"]
 
-            total_reward += reward
-            if terminated or truncated:
+            done = terminated or truncated
+
+            state_idx = state.item()
+            action_idx = action.item()
+            next_state_idx = next_state.item()
+
+            # Update solver with learner method
+            self.solver.learner(state_idx, action_idx, next_state_idx, reward, terminated, truncated)
+
+            # Fill callback
+            callback.locals = {
+                'rewards': reward,
+                'dones': done,
+                'terminated': [terminated],
+                'truncated': [truncated]
+            }
+
+            if not callback.on_step():
                 break
-        discrete_state = self.map_state_to_discrete(continuous_state)
-        return discrete_state, total_reward, terminated, truncated, info
 
-    def render(self):
-        return self.env.render()
-    def close(self):
-        return self.env.close()
+            state = next_state if not done else self.env.reset()
+            self.num_timesteps += 1
+
+            if done:
+                self.logger.record("train/episode_reward", episode_reward)
+                episode_reward = 0.0
+
+        callback.on_training_end()
+        return self
+
+    def save(self, path: str) -> None:
+        numpy.savez_compressed(
+            f"{path}.npz",
+            value_matrix=self.solver.value_matrix,
+            sa_visited=self.solver.sa_vistied,
+            gamma=self.solver.gamma,
+            alpha=self.solver.alpha,
+            c=self.solver._c,
+        )
+
+    @classmethod
+    def load(cls, path: str, env: GymEnv, **kwargs) -> "QLearning":
+        data = numpy.load(f"{path}.npz")
+        model = cls(env=env, **kwargs)
+        model.solver.value_matrix = data["value_matrix"]
+        model.solver.sa_vistied = data["sa_visited"]
+        model.solver.gamma = float(data["gamma"])
+        model.solver.alpha = float(data["alpha"])
+        model.solver._c = float(data["c"])
+        return model
+
 
 class RolloutLogger(BaseCallback):
     """
@@ -353,7 +252,7 @@ class OnlineRL:
         self.log_callback = RolloutLogger(env_name, max_trails, max_steps, downsample_trail, verbose=1)
         
     def create_model(self):
-        model_classes = {'a2c': A2C, 'ppo': PPO, 'dqn': DQN, 'td3': TD3}
+        model_classes = {'a2c': A2C, 'ppo': PPO, 'dqn': DQN, 'td3': TD3, 'qlearning': QLearning, 'cql': CQL}
         if self.model_name not in model_classes:
             raise ValueError("Unknown policy type: {}".format(self.model_name))
         
@@ -374,14 +273,105 @@ class OnlineRL:
                 learning_rate=0.0025, buffer_size=1_000_000, train_freq=(1, 'episode'),
                 gradient_steps=1, action_noise=None, optimize_memory_usage=False,
                 replay_buffer_class=None, replay_buffer_kwargs=None, verbose=1)
+        elif self.model_name.lower() == 'qlearning':
+            self.model = QLearning(env=self.env, learning_rate=0.7, discount_factor=0.95,
+                                   epsilon=1.0, epsilon_decay=0.999, min_epsilon=0.01, verbose=1)
+        elif self.model_name.lower() == 'cql':
+            self.model = CQL(env=self.env, gamma=0.99, alpha=1.0, lr=3e-4, buffer_capacity=100000, batch_size= 64, tau=0.005)
 
-    def __call__(self):
+    def offline_learning(self, offline_learning_path, episode_end_prompt = 7):
+        states = numpy.load(os.path.join(offline_learning_path, 'observations.npy'))
+        prompts = numpy.load(os.path.join(offline_learning_path, 'prompts.npy'))
+        actions = numpy.load(os.path.join(offline_learning_path, 'actions_behavior.npy'))
+        rewards = numpy.load(os.path.join(offline_learning_path, 'rewards.npy'))
+
+        states = states.astype(numpy.int32)
+        prompts = prompts.astype(numpy.int32)
+        actions = actions.astype(numpy.int32)
+        rewards = rewards.astype(numpy.float32)
+
+        assert len(states) == len(actions), "Length of states mismatch."
+
+        end_indices = numpy.where(prompts == episode_end_prompt)[0]
+        valid_mask = numpy.ones(len(actions), dtype=bool)
+        dones = numpy.zeros(len(actions), dtype=bool)
+        for end_idx in end_indices:
+            if end_idx > 0:
+                dones[end_idx-1] = True
+                if end_idx < len(actions):
+                    valid_mask[end_idx] = False
+        current_states = states[valid_mask]
+        next_states = states[1:][valid_mask[:-1]]
+        actions = actions[valid_mask]
+        rewards = rewards[valid_mask]
+        dones = dones[valid_mask]
+
+        valid_length = len(next_states)
+        current_states = current_states[:valid_length]
+        actions = actions[:valid_length]
+        rewards = rewards[:valid_length]
+        dones = dones[:valid_length]
+
+        assert len(current_states) == len(actions) == len(rewards) == len(next_states) == len(dones), \
+        "Processed data length mismatch"
+
+        buffer_capacity = self.model.replay_buffer.capacity
+        batch_size = self.model.batch_size
+        epoch_num = 100
+        if current_states.shape[0] > buffer_capacity:
+            current_states = current_states[:buffer_capacity]
+            actions = actions[:buffer_capacity]
+            rewards = rewards[:buffer_capacity]
+            next_states = next_states[:buffer_capacity]
+            dones = dones[:buffer_capacity]
+        steps_per_epoch = (len(current_states) + batch_size - 1) // batch_size
+        total_steps = steps_per_epoch * epoch_num
+
+        self.model.add_demo_data(current_states, actions, rewards, next_states, dones)
+        self.model.offline_learn(total_steps=total_steps)
+
+    
+    def __call__(self, offline_learning = False, offline_learning_path = None, episode_end_prompt = 7):
         self.create_model()
+        if offline_learning:
+            self.offline_learning(offline_learning_path, episode_end_prompt=episode_end_prompt)
         self.model.learn(total_timesteps=int(1e6), callback=self.log_callback)
         return (self.log_callback.reward_sums, 
                 self.log_callback.step_counts, 
                 self.log_callback.success_rate)
 
+class LoadRLModel:
+    def __init__(self, env, env_name, model_name = None, model_path=None):
+        self.env = env
+        self.env_name = env_name.lower()
+        if model_name is None:
+            self.model_name = model_name.lower()
+        if model_path is None:
+            self.model_path = model_path
+        self.supported_gym_env = ["lake", "lander", "mountaincar", "pendulum", "cliff"]
+
+    def load(self):
+        if self.env_name.find("anymdp") >= 0:
+            model = AnyMDPSolverOpt(self.env)
+            def benchmark_model(state):
+                return model.policy(state)
+            self.benchmark_opt_model = benchmark_model
+        elif any(self.env_name.find(name) == 0 for name in self.supported_gym_env):
+            model_classes = {'dqn': DQN, 'a2c': A2C, 'td3': TD3, 'ppo': PPO, 'qlearning': QLearning, 'cql': CQL}
+            if self.model_name not in model_classes:
+                raise ValueError("Unknown policy type: {}".format())
+            model = model_classes[self.model_name].load(f'{self.model_path}/model/{self.model_name}.zip', env=self.env)
+            def benchmark_model(state):
+                action, _ = model.predict(state)
+                return int(action)
+            self.benchmark_opt_model = benchmark_model
+        else:
+            raise ValueError("Unsupported environment:", self.env_name)
+
+    def __call__(self):
+        self.load()
+        return self.benchmark_opt_model
+    
 if __name__ == "__main__":
     model_name = "dqn"
     env_name = "lake"
@@ -390,6 +380,7 @@ if __name__ == "__main__":
     downsample_trail = 10
 
     if env_name == "lake":
+        import gymnasium
         env = gymnasium.make('FrozenLake-v1', map_name="4x4", is_slippery=True)
     else:
         raise ValueError(f"Unknown environment: {env_name}")
@@ -400,89 +391,3 @@ if __name__ == "__main__":
     print("Reward Sums:", reward_sums)
     print("Step Counts:", step_counts)
     print("Success Rate:", success_rate)
-
-class Switch2(Switch):
-
-    def __init__(self, full_observable: bool = False, step_cost: float = 0, n_agents: int = 4, max_steps: int = 50,
-                 clock: bool = True):
-        super().__init__(full_observable, step_cost, n_agents, max_steps, clock)
-        self.init_mapping()
-
-    def init_mapping(self):
-        position_to_state = {}
-        state_counter = 0
-        
-        for i in range(self._full_obs.shape[0]):
-            for j in range(self._full_obs.shape[1]):
-                if self._full_obs[i, j] != -1:
-                    position_to_state[(i, j)] = state_counter
-                    state_counter += 1  
-        self.position_to_state = position_to_state
-        for position, state in position_to_state.items():
-            print(f"Position {position} -> State {state}")
-
-    def get_agent_obs(self):
-        _obs = []
-        _obs_1dim = []
-        for agent_i in range(0, self.n_agents):
-            pos = self.agent_pos[agent_i]
-            _agent_i_obs = pos
-            _obs.append(_agent_i_obs)
-
-        agent1_state = self.position_to_state[tuple(self.agent_pos[0])]
-        agent2_state = self.position_to_state[tuple(self.agent_pos[1])]
-        agent1_x = self.agent_pos[0][1]
-        agent1_y = self.agent_pos[0][0]
-        agent2_x = self.agent_pos[1][1]
-        agent2_y = self.agent_pos[1][0]
-        if self.full_observable:
-            # method 1: another agent's x pos (0~6)
-            # method 2: relative x position when y1 = y2 & abs(x1-x2)<=2 (0~4)
-            # method 3: another agent's area, left \ bridge \ right  (0~2)
-            # method 4: another agent on bridge & (x > x_another -> 1 or x < x_another -> 2), else 0
-            method = 1 
-            if method == 1:
-                _obs_1dim.append(agent2_x * 15 + agent1_state)
-                _obs_1dim.append(agent1_x * 15 + agent2_state)
-            elif method == 2:
-                def get_idx(agent_x, another_agent_x):
-                    x_diff = agent_x - another_agent_x
-                    mapping = {2: 1, 1: 2, -1: 3, -2: 4}
-                    return mapping.get(x_diff, 0) 
-
-                if agent1_y != agent2_y:
-                    _obs_1dim.append(agent1_state)
-                    _obs_1dim.append(agent2_state)
-                else:
-                    _obs_1dim.append(get_idx(agent1_x, agent2_x) * 15 + agent1_state)
-                    _obs_1dim.append(get_idx(agent2_x, agent1_x) * 15 + agent2_state)
-            elif method == 3:
-                def get_area(another_agent_x):
-                    return 0 if another_agent_x < 2 else (1 if another_agent_x < 5 else 2)
-                _obs_1dim.append(get_area(agent2_x) * 15 + agent1_state)
-                _obs_1dim.append(get_area(agent1_x) * 15 + agent2_state)
-            elif method == 4:
-                def get_bridge_relative(agent_x, another_agent_x):
-                    if another_agent_x in range(2, 5):
-                        return 1 if agent_x > another_agent_x else 2
-                    return 0
-                _obs_1dim.append(get_bridge_relative(agent1_x, agent2_x) * 15 + agent1_state)
-                _obs_1dim.append(get_bridge_relative(agent2_x, agent1_x) * 15 + agent2_state)
-
-        else:
-            _obs_1dim.append(agent1_state)
-            _obs_1dim.append(agent2_state)
-
-        # append original observation
-        _obs_1dim.append(self.agent_pos[0])
-        _obs_1dim.append(self.agent_pos[1])
-        
-        return _obs_1dim
-    
-    def render(self, mode='rgb_array'):
-        if mode == 'human':
-            super().render(mode=mode)
-        elif mode == 'rgb_array':
-            return super().render(mode=mode)
-        else:
-            raise ValueError(f"Unsupported mode: {mode}")

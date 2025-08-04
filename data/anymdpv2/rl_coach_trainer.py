@@ -6,8 +6,8 @@ import os
 from stable_baselines3 import SAC, PPO
 from sb3_contrib import RecurrentPPO
 import torch.nn as nn
-from l3c.anymdpv2 import AnyMDPv2TaskSampler
-from l3c.anymdpv2 import AnyMDPEnv
+from xenoverse.anymdpv2 import AnyMDPv2TaskSampler
+from xenoverse.anymdpv2 import AnyMDPEnv
 from policy_trainer.noise_distiller import NoiseDistillerWrapper, NoiseDistillerPolicy
 from stable_baselines3.common.callbacks import BaseCallback
 import gym
