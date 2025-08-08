@@ -4,6 +4,7 @@ import sys
 import os
 import random
 import time
+import torch
 import numpy as np
 import argparse
 import multiprocessing
@@ -13,8 +14,6 @@ from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
 import xenoverse.metacontrol
 from xenoverse.metacontrol import sample_cartpole
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 def dump_cartpole_record(
     file_path,
@@ -37,16 +36,17 @@ def dump_cartpole_record(
         policy="MlpPolicy", 
         env=env,
         n_steps=2048,
-        batch_size=64,
+        batch_size=16,
         gamma=0.99,
-        verbose=0
+        verbose=1
     )
  
-    model.learn(total_timesteps=40000)
+    model.learn(total_timesteps=40960)
     arr_obs = []
     arr_bactions = []
     arr_lactions = []
     arr_rewards = []
+    print("finish coach training")
 
     for _ in range(seq_number):
         seq_obs = []
@@ -124,7 +124,7 @@ if __name__=="__main__":
     parser.add_argument("--output_path", type=str, default="./cartpole_data/", help="output directory, the data would be stored as output_path/record-xxxx.npy")
     parser.add_argument("--seq_length", type=int, default=200, help="max steps, default:500")
     parser.add_argument("--offpolicy_labeling", type=int, default=0, help="enable offpolicy labeling (DAgger), default:False")
-    parser.add_argument("--seq_number", type=int, default=500, help="sequence number, default:500")
+    parser.add_argument("--seq_number", type=int, default=100, help="sequence number, default:500")
     parser.add_argument("--task_number", type=int, default=8, help="task number, default:8")
     parser.add_argument("--start_index", type=int, default=0, help="start id of the record number")
     parser.add_argument("--workers", type=int, default=4, help="number of multiprocessing workers")
