@@ -37,7 +37,7 @@ class MLPDecision(nn.Module):
         else:
             raise ValueError("Invalid reward encoding type", config.action_encoding)
 
-        self.hidden_size = config.causal_block.hidden_size
+        self.hidden_size = config.causal_block.input_size
         self.causal_model = ResidualMLPDecoder(config.causal_block)
 
         self.rsa_choice =  ["poar", "oar", "oa", "poa"]
@@ -192,7 +192,7 @@ class MLPDecision(nn.Module):
                 o_in, prompts, tags, behavior_actions, rewards,
                 cache=None, need_cache=False,
                 update_memory=update_memory)
-                
+
         # Calculate the loss information
         loss = dict()
         # Mask out the invalid actions
