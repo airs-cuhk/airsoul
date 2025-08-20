@@ -220,9 +220,8 @@ def EpochManager(cls):
                 # Safety Check and Save
                 need_break = False
                 if(self.is_training and self.config.has_attr("max_save_iterations") 
-                                and (self.get_global_batch_id + 1) > self.config.max_save_iterations 
+                                and (self.get_global_batch_id + 1) % self.config.max_save_iterations == 0
                                 and self.config.max_save_iterations > 0):
-                    acc_iter = 0
                     log_debug("\nSAVE MODEL FOR FAIL-SAFETY...\n", on=self.main)
                     if(self.main):
                         custom_save_model(self.model, self.config.save_model_path,

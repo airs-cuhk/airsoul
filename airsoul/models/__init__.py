@@ -3,3 +3,4 @@ from .language_model import LanguageModel
 from .e2e_objnav_sa import E2EObjNavSA
 from .omni_rl import OmniRL
 from .multiagent_model import OmniRL_MultiAgent
+from .mlp_decision import MLPDecision
