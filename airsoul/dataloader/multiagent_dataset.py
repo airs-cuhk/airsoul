@@ -165,6 +165,7 @@ class MultiAgentDataSet(Dataset):
         return self.TAG_BASE + value
 
     def _handle_value(self, value, behavior_value = None, use_diff_action = True):
+        # value in (batch, timestep, value) shape
         scalar_input = False
         if not isinstance(value, np.ndarray):
             value = np.array(value)
@@ -182,25 +183,25 @@ class MultiAgentDataSet(Dataset):
                 if use_diff_action:
                     if behavior_value is None:
                         flags_previous_off = np.zeros_like(on_mask, dtype=bool)
-                        flags_previous_off[0] = True
-                        flags_previous_off[1:] = ~on_mask[:-1]
-                        on_values_previous_off = flags_previous_off[on_mask]
-                        diff_values = np.zeros_like(on_values)
-                        diff_values[1:] = on_values[1:] - on_values[:-1]
-                        diff_values[on_values_previous_off] = on_values[on_values_previous_off]
-                        on_values = diff_values
+                        flags_previous_off[:,0] = True
+                        flags_previous_off[:,1:] = ~on_mask[:,:-1]
+                        on_values_previous_off = flags_previous_off & on_mask
+                        diff_values = np.zeros_like(raw_values)
+                        diff_values[:,1:] = raw_values[:,1:] - raw_values[:,:-1]
+                        diff_values[on_values_previous_off] = raw_values[on_values_previous_off]
+                        on_values = diff_values[on_mask]
                     else:
-                        raw_values_behavior = behavior_value[:, :, 0:1][on_mask]
+                        raw_values_behavior = behavior_value[:, :, 0:1]
                         flags_behavior = behavior_value[:, :, 1:2]
                         behavior_on_mask = flags_behavior > 0.5
                         behavior_previous_off = np.zeros_like(behavior_on_mask, dtype=bool)
-                        behavior_previous_off[0] = True
-                        behavior_previous_off[1:] = ~behavior_on_mask[:1]
-                        behavior_previous_off = behavior_previous_off[on_mask]
-                        diff_values = np.zeros_like(on_values)
-                        diff_values[1:] = on_values[1:] - raw_values_behavior[:-1]
-                        diff_values[behavior_previous_off] = on_values[behavior_previous_off]
-                        on_values = diff_values
+                        behavior_previous_off[:,0] = True
+                        behavior_previous_off[:,1:] = ~behavior_on_mask[:,:-1]
+                        behavior_previous_off = behavior_previous_off & on_mask
+                        diff_values = np.zeros_like(raw_values)
+                        diff_values[:,1:] = raw_values[:, 1:] - raw_values_behavior[:, :-1]
+                        diff_values[behavior_previous_off] = raw_values[behavior_previous_off]
+                        on_values = diff_values[on_mask]
 
                 below_min = on_values < self.min_value
                 above_max = on_values > self.max_value
@@ -237,7 +238,8 @@ class MultiAgentDataSet(Dataset):
             return result.item() if scalar_input else result
 
     def _handle_action_vocab(self, vocab, value_previous=None, use_diff_action=True):
-        # vocab: [num_of_agent, T, value]
+        # vocab: [num_of_agent, 1, 1]
+        # value_previous: [num_of_agent, 1, 2]
         num_agents, timesteps = vocab.shape[:2]
         result = np.zeros((num_agents, timesteps, 2))
         off_mask = (vocab == self.ACTION_OFF_BASE)
@@ -256,11 +258,10 @@ class MultiAgentDataSet(Dataset):
             result[on_mask][in_range_mask] = np.column_stack([restored_values, np.ones_like(restored_values)])
         
         if use_diff_action and value_previous is not None:
-            off_mask_previous = (value_previous[:, :, 1] < 0.5)
-            on_mask_previous = ~ off_mask_previous
+            on_mask_previous = (value_previous[:, :, 1] > 0.5)
             both_on_mask = on_mask_previous & on_mask
-            diff_value = result[:, :, 0][both_on_mask] - value_previous[:, :, 0][both_on_mask]
-            result[:, :, 0][both_on_mask]= diff_value
+            real_value = result[:, :, 0][both_on_mask] + value_previous[:, :, 0][both_on_mask]
+            result[:, :, 0][both_on_mask]= real_value
 
         return result
 
@@ -651,4 +652,25 @@ if __name__ == "__main__":
         args.vocab_size,
         num_workers=args.num_workers
     )
+
+    # Develop
+    # os.makedirs(args.save_dir, exist_ok=True)
+    
+    # sub_dirs = [d for d in os.listdir(args.load_dir) 
+    #             if os.path.isdir(os.path.join(args.load_dir, d))]
+    
+    # print(f"Found {len(sub_dirs)} subdirectories to process")
+    # dataset = MultiAgentDataSetVetorized(
+    #     directory=args.load_dir,
+    #     time_step=args.time_step,
+    #     max_obs_num=args.max_obs_num,
+    #     max_agent_num=args.max_agent_num,
+    #     tag_num=args.tag_num,
+    #     value_num=args.value_num,
+    #     resolution=args.resolution,
+    #     vocab_size=args.vocab_size,
+    #     verbose=True
+    # )
+    # sub_path = os.path.join(args.load_dir, sub_dirs[122])
+    # results = dataset._load_and_process_data(sub_path)
 
