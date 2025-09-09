@@ -124,7 +124,7 @@ class OmniRL_MultiAgent(MultiAgentModel):
         """
         world_model_obs_mask = (inputs < self.AGENT_IDX_OFFSET)
         world_model_action_mask = (inputs >= self.AGENT_IDX_OFFSET) & (inputs < self.SPECIAL_TOKENS_OFFSET)
-        policy_mask = (inputs == self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS['idx_policy'])
+        policy_mask = (inputs == self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS['idx_a_self'])
         reward_mask = (inputs == (self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS['idx_reward']))
 
         return world_model_obs_mask, world_model_action_mask, policy_mask, reward_mask
@@ -206,6 +206,11 @@ class OmniRL_MultiAgent(MultiAgentModel):
                 reutrn wd_obs, wd_action, action
         """
         # inputs: [BT, NT]
+        device = next(self.parameters()).device
+        if not torch.is_tensor(inputs):
+            inputs = torch.tensor(inputs).to(device)
+        else:
+            inputs = inputs.to(device)
         BT = inputs.size(0)
         outputs, _ = self.forward(inputs, need_cache=False, update_memory=False)
         
@@ -287,6 +292,12 @@ class OmniRL_MultiAgent(MultiAgentModel):
             idx_a1, a1, idx_a2, a2, idx_a4, a4, ..., 
             idx_policy, idx_tag, tag, idx_a_self, a_self, idx_reward]
         """
+        device = next(self.parameters()).device
+        if not torch.is_tensor(inputs):
+            inputs = torch.tensor(inputs).to(device)
+        else:
+            inputs = inputs.to(device)
+
         _, cache = self.forward(inputs, need_cache=need_cache, update_memory=True)
         if need_cache:
             return cache                       

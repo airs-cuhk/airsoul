@@ -11,28 +11,29 @@ log_config:
 
 model_config:
   context_warmup: 512
+  action_dim: 236
   max_position_loss_weighting: 128000
   policy_loss_type: CrossEntropy
 
-  vocab_size: 516 # nobs + nagent + ntag + value_num + 10
-  nobs: 100
-  nagent: 100
+  vocab_size: 236 # nobs + nagent + ntag + value_num + 10
+  nobs: 10
+  nagent: 10
   ntag: 6
   default_tag: 5
-  value_num: 300
+  value_num: 200
   resolution: 0.1
 
   word_embeddings:
       model_type: MLP
       input_type: Discrete
-      input_size: 516
+      input_size: 236
       hidden_size: 1024
       dropout: 0.0
   output_layers:
       model_type: MLP
       output_type: Discrete
       input_size: 1024
-      hidden_size: 516
+      hidden_size: 236
       layer_norm: True
       residual_connect: False
       dropout: 0.0
@@ -186,3 +187,26 @@ test_config:
     seq_len: 16000
     seg_len: 4000
 
+generator_config:
+    env: hvac
+    task_file: [PATH]
+    epoch_numbers: 1
+    downsample_trail: 30
+    decoding_strategy:
+        T_ini: 1.0
+        T_fin: 0.1
+        T_step: 10000
+        decay_type: Linear
+    max_trails: 1000 
+    max_steps: 200
+    max_total_steps: 0
+    learn_from_data: False
+    data_root: [Path]
+    output: "./online_eval/"
+    vocab:
+        max_obs_num: 10
+        max_agent_num: 10
+        tag_num: 6
+        value_num: 300
+        resolution: 0.1
+        vocab_size: 236

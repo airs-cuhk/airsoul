@@ -229,6 +229,7 @@ model_config:
       position_encoding_size: 48000
       use_layer_norm: True
       use_blockrecurrence: True
+      checkpoints_density: -1
       memory_length: 3000
       memory_type: KV
       is_frozen: False

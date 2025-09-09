@@ -75,11 +75,11 @@ class MultiAgentDataSet(Dataset):
     All of the id and value are transform into discrete integer values, forming the vocabular.
     - i.e., we have m obs_id, n agent_id -> m + n words
         idx_policy, idx_tag, idx_a_self, idx_reward, idx_end_timestep, idx_reset_env -> 6 words
-        t tag_value -> t words 
-        value of obs, action, and reward ~ [-10, 10], resolution 0.1 -> 200 words
+        t tag_value -> t words (t=6)
+        value of obs, action, and reward ~ [-10, 10], resolution 0.1, upper and lower -> 202 words 
         off_action_id -> 1 word
         idx_padding -> 1 word
-        Then the total vocabular size = m + n + t + 208
+        Then the total vocabular size = m + n + t + 310
         
     - For one timestep the sequence is arranged as: 
         [ idx_o1, o1, idx_o3, o3, idx_o4, o4, ..., 
@@ -143,13 +143,14 @@ class MultiAgentDataSet(Dataset):
         self.VALUE_BASE = self.TAG_BASE + self.tag_num
         self.ACTION_OFF_BASE = self.VALUE_BASE + self.value_num + 2 # 2: lower and upper value
 
-    def vocabularize(self, type, value, behavior_value=None):
+    def vocabularize(self, type, value, behavior_value=None,value_previous=None,use_diff_action=True):
         handler = getattr(self, f'_handle_{type}', None)
         if handler:
             if behavior_value is not None:
-                return handler(value,behavior_value)
-            else:
-                return handler(value)
+                return handler(value,behavior_value, use_diff_action=use_diff_action)
+            if value_previous is not None:
+                return handler(value,value_previous, use_diff_action=use_diff_action)
+            return handler(value)
         raise ValueError(f"Invalid type: {type}")
 
     def _handle_obs_id(self, value):
@@ -240,8 +241,10 @@ class MultiAgentDataSet(Dataset):
     def _handle_action_vocab(self, vocab, value_previous=None, use_diff_action=True):
         # vocab: [num_of_agent, 1, 1]
         # value_previous: [num_of_agent, 1, 2]
+        if not hasattr(vocab, 'shape'):
+            vocab = np.array(vocab)
         num_agents, timesteps = vocab.shape[:2]
-        result = np.zeros((num_agents, timesteps, 2))
+        result = np.ones((num_agents, timesteps, 2))
         off_mask = (vocab == self.ACTION_OFF_BASE)
         on_mask = ~ off_mask
         result[off_mask] = [0.0,0.0]
@@ -250,18 +253,24 @@ class MultiAgentDataSet(Dataset):
         below_min_mask = (vocab_on == self.VALUE_BASE)
         above_max_mask = (vocab_on == self.VALUE_BASE + self.value_num + 1)
         in_range_mask = ~(below_min_mask | above_max_mask)
-        result[on_mask][below_min_mask] = [self.min_value, 1.0]
-        result[on_mask][above_max_mask] = [self.max_value, 1.0]
+        combined_mask_above = on_mask.copy()
+        combined_mask_below = on_mask.copy()
+        combined_mask_on_value = on_mask.copy()
+        combined_mask_above[on_mask] = above_max_mask
+        combined_mask_below[on_mask] = below_min_mask
+        combined_mask_on_value[on_mask] = in_range_mask
+        result[combined_mask_above] = [1.0, self.min_value]
+        result[combined_mask_below] = [1.0, self.max_value]
         if np.any(in_range_mask):
+            
             quantized_index = vocab_on[in_range_mask] - self.VALUE_BASE - 1
             restored_values = self.min_value + quantized_index * self.resolution
-            result[on_mask][in_range_mask] = np.column_stack([restored_values, np.ones_like(restored_values)])
+            result[combined_mask_on_value] = np.column_stack([np.ones_like(restored_values), restored_values])
         
         if use_diff_action and value_previous is not None:
             on_mask_previous = (value_previous[:, :, 1] > 0.5)
             both_on_mask = on_mask_previous & on_mask
-            real_value = result[:, :, 0][both_on_mask] + value_previous[:, :, 0][both_on_mask]
-            result[:, :, 0][both_on_mask]= real_value
+            result[both_on_mask, 1] = result[both_on_mask, 1] + value_previous[both_on_mask, 1]
 
         return result
 
@@ -375,7 +384,7 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
         
         return merged    
 
-    def _load_and_process_data(self, path, use_relative_idx=False):
+    def _load_and_process_data(self, path, use_relative_idx=True):
         try:
             observations = np.load(path + '/diff_observations.npy')
             actions_behavior = np.load(path + '/diff_actions_behavior.npy')

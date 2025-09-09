@@ -255,9 +255,9 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
                 model_type, train_objects, evaluate_objects, extra_info):
     """
     """
-    local_rank = int(os.environ["LOCAL_RANK"])
     if use_gpu:
         if is_multi_node():
+            local_rank = int(os.environ["LOCAL_RANK"])
             torch.cuda.set_device(local_rank)
             device = torch.device(f'cuda:{local_rank}')
             device_type = 'cuda'
