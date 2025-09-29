@@ -74,17 +74,23 @@ class MultiAgentDataSet(Dataset):
     """
     All of the id and value are transform into discrete integer values, forming the vocabular.
     - i.e., we have m obs_id, n agent_id -> m + n words
-        idx_policy, idx_tag, idx_a_self, idx_reward, idx_end_timestep, idx_reset_env -> 6 words
-        t tag_value -> t words (t=6)
+        idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env -> 4 words
+        (If reward is included, idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env, idx_reward -> 5 words)
+        p prompt_value -> p words (p=3)
         value of obs, action, and reward ~ [-10, 10], resolution 0.1, upper and lower -> 202 words 
         off_action_id -> 1 word
         idx_padding -> 1 word
-        Then the total vocabular size = m + n + t + 310
+        Then the total vocabular size = m + n + p + 308
+        (If reward is included, Then the total vocabular size = m + n + p + 309)
         
     - For one timestep the sequence is arranged as: 
         [ idx_o1, o1, idx_o3, o3, idx_o4, o4, ..., 
         idx_a1, a1, idx_a2, a2, idx_a4, a4, ..., 
-        idx_policy, idx_tag, tag, idx_a_self, a_self, idx_reward, reward, idx_end_timestep ]
+        idx_prompt, prompt, idx_a_self, a_self, idx_end_timestep ]
+        (If reward is included:
+        [ idx_o1, o1, idx_o3, o3, idx_o4, o4, ..., 
+        idx_a1, a1, idx_a2, a2, idx_a4, a4, ..., 
+        idx_prompt, prompt, idx_a_self, a_self, idx_reward, reward_value, idx_end_timestep])
 
     - For obs connection 2D matrix, the line is obs_id, the column is agent_idx,
         value is 1 if the obs is useful for agent.
@@ -92,10 +98,10 @@ class MultiAgentDataSet(Dataset):
     - For agent connection 2D matrix, the line is agent_idx, the column is agent_idx,
         value is 1 if the two agent have connection.    
 
-    - The data is save as observations_*.npy, actions_behavior_*.npy, actions_behavior_*.npy, tags_*.npy, rewards.npy
+    - The data is save as observations_*.npy, actions_behavior_*.npy, actions_behavior_*.npy, prompts_*.npy, rewards.npy
         The sequential data is constructed base on two connection matrix above as each time steps, and each agent can form a sequence.
     """
-    def __init__(self, directory, time_step, max_obs_num, max_agent_num, tag_num, value_num, resolution, vocab_size, verbose=False):
+    def __init__(self, directory, time_step, max_obs_num, max_agent_num, prompt_num, value_num, resolution, vocab_size, verbose=False):
         if(verbose):
             print("\nInitializing data set from file: %s..." % directory)
         self.file_list = []
@@ -111,12 +117,14 @@ class MultiAgentDataSet(Dataset):
         self.time_step = time_step
         self.max_obs_num = max_obs_num
         self.max_agent_num = max_agent_num
-        self.tag_num = tag_num
+        self.prompt_num = prompt_num
         self.resolution = resolution
         self.vocab_size = vocab_size
         self.min_value = - resolution * value_num / 2
         self.max_value = - self.min_value
         self.value_num = value_num
+
+        self.include_reward = False
 
         self._init_vocab_offsets()
 
@@ -131,16 +139,23 @@ class MultiAgentDataSet(Dataset):
         self.OBS_IDX_OFFSET = 0
         self.AGENT_IDX_OFFSET = self.max_obs_num
         self.SPECIAL_TOKENS_OFFSET = self.AGENT_IDX_OFFSET + self.max_agent_num
-        self.SPECIAL_TOKENS = {
-            'idx_policy': 0,
-            'idx_tag': 1,
-            'idx_a_self': 2,
-            'idx_reward': 3,
-            'idx_end_timestep': 4,
-            'idx_reset_env': 5
-        }
-        self.TAG_BASE = self.SPECIAL_TOKENS_OFFSET + len(self.SPECIAL_TOKENS)
-        self.VALUE_BASE = self.TAG_BASE + self.tag_num
+        if self.include_reward:
+            self.SPECIAL_TOKENS = {
+                'idx_prompt': 0,
+                'idx_a_self': 1,
+                'idx_end_timestep': 2,
+                'idx_reset_env': 3,
+                'idx_reward': 4
+            }
+        else:
+           self.SPECIAL_TOKENS = {
+                'idx_prompt': 0,
+                'idx_a_self': 1,
+                'idx_end_timestep': 2,
+                'idx_reset_env': 3
+            }
+        self.PROMPT_BASE = self.SPECIAL_TOKENS_OFFSET + len(self.SPECIAL_TOKENS)
+        self.VALUE_BASE = self.PROMPT_BASE + self.prompt_num
         self.ACTION_OFF_BASE = self.VALUE_BASE + self.value_num + 2 # 2: lower and upper value
 
     def vocabularize(self, type, value, behavior_value=None,value_previous=None,use_diff_action=True):
@@ -162,8 +177,8 @@ class MultiAgentDataSet(Dataset):
     def _handle_special_token(self, token_type):
         return self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS[token_type]
 
-    def _handle_tag_value(self, value):
-        return self.TAG_BASE + value
+    def _handle_prompt_value(self, value):
+        return self.PROMPT_BASE + value
 
     def _handle_value(self, value, behavior_value = None, use_diff_action = True):
         # value in (batch, timestep, value) shape
@@ -279,7 +294,7 @@ class MultiAgentDataSet(Dataset):
             observations = np.load(path + '/diff_observations.npy')
             actions_behavior = np.load(path + '/diff_actions_behavior.npy')
             actions_label = np.load(path + '/diff_actions_label.npy')
-            tags = np.load(path + '/tags.npy')
+            prompts = np.load(path + '/prompts.npy')
             rewards = np.load(path + '/rewards.npy')
             resets = np.load(path + '/resets.npy')
 
@@ -292,7 +307,7 @@ class MultiAgentDataSet(Dataset):
                         rewards.shape[0], 
                         actions_behavior[0].shape[0],
                         observations[0].shape[0],
-                        tags[0].shape[0])
+                        prompts[0].shape[0])
 
             # Shape Check
             if(self.time_step > max_t):
@@ -320,14 +335,14 @@ class MultiAgentDataSet(Dataset):
                         other_agent_value = actions_behavior[other_agent_id][t]
                         time_step_seq.append(self.vocabularize('agent_id', other_agent_id))
                         time_step_seq.append(self.vocabularize('value', other_agent_value))
-                    # idx_policy, idx_tag, tag, idx_a_self, a_self, idx_reward, reward, idx_end_timestep
-                    time_step_seq.append(self.vocabularize('special_token', 'idx_policy'))
-                    time_step_seq.append(self.vocabularize('special_token', 'idx_tag'))
-                    time_step_seq.append(self.vocabularize('tag_value', tags[agent_id][t]))
+                    # idx_prompt, prompt, idx_a_self, a_self, (idx_reward, reward,) idx_end_timestep
+                    time_step_seq.append(self.vocabularize('special_token', 'idx_prompt'))
+                    time_step_seq.append(self.vocabularize('prompt_value', prompts[agent_id][t]))
                     time_step_seq.append(self.vocabularize('special_token', 'idx_a_self'))
                     time_step_seq.append(self.vocabularize('value', actions_behavior[agent_id][t]))
-                    time_step_seq.append(self.vocabularize('special_token', 'idx_reward'))
-                    time_step_seq.append(self.vocabularize('value', rewards[t]))
+                    if self.include_reward:
+                        time_step_seq.append(self.vocabularize('special_token', 'idx_reward'))
+                        time_step_seq.append(self.vocabularize('value', rewards[t]))
                     if resets[t]:
                         time_step_seq.append(self.vocabularize('special_token', 'idx_reset_env'))
                     else:
@@ -336,7 +351,7 @@ class MultiAgentDataSet(Dataset):
 
                 agent_sequence = np.concatenate(agent_sequence)
 
-                policy_position_mask = (agent_sequence == self.vocabularize('special_token', 'idx_policy'))
+                policy_position_mask = (agent_sequence == self.vocabularize('special_token', 'idx_a_self'))
                 label_vocabularize = self.vocabularize('value', actions_label[agent_id][n_b:n_e], )
                 if np.sum(policy_position_mask) != len(label_vocabularize):
                     raise ValueError(
@@ -355,8 +370,8 @@ class MultiAgentDataSet(Dataset):
             return (None,) * 6
         
 class MultiAgentDataSetVetorized(MultiAgentDataSet):
-    def __init__(self, directory, time_step, max_obs_num, max_agent_num, tag_num, value_num, resolution, vocab_size, verbose=False):
-        super().__init__(directory, time_step, max_obs_num, max_agent_num, tag_num, value_num, resolution, vocab_size, verbose)
+    def __init__(self, directory, time_step, max_obs_num, max_agent_num, prompt_num, value_num, resolution, vocab_size, verbose=False):
+        super().__init__(directory, time_step, max_obs_num, max_agent_num, prompt_num, value_num, resolution, vocab_size, verbose)
 
     def _handle_obs_id(self, value):
         return value.astype(np.int64) if isinstance(value, np.ndarray) else int(value)
@@ -364,8 +379,8 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
     def _handle_agent_id(self, value):
         return (self.AGENT_IDX_OFFSET + value).astype(np.int64) if isinstance(value, np.ndarray) else self.AGENT_IDX_OFFSET + value
 
-    def _handle_tag_value(self, value):
-        return (self.TAG_BASE + value).astype(np.int64) if isinstance(value, np.ndarray) else self.TAG_BASE + value
+    def _handle_prompt_value(self, value):
+        return (self.PROMPT_BASE + value).astype(np.int64) if isinstance(value, np.ndarray) else self.PROMPT_BASE + value
 
     def _interleave_columns(self, arrays):
         
@@ -389,7 +404,7 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
             observations = np.load(path + '/diff_observations.npy')
             actions_behavior = np.load(path + '/diff_actions_behavior.npy')
             actions_label = np.load(path + '/diff_actions_label.npy')
-            tags = np.load(path + '/tags.npy')
+            prompts = np.load(path + '/prompts.npy')
             rewards = np.load(path + '/rewards.npy')
             resets = np.load(path + '/resets.npy')
             obs_matrix = np.load(path + '/obs_graph.npy')
@@ -399,13 +414,13 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
                         rewards.shape[0], 
                         actions_behavior[0].shape[0],
                         observations[0].shape[0],
-                        tags[0].shape[0])
+                        prompts[0].shape[0])
             num_agents = actions_behavior.shape[0]
 
             # Convert to a numpy array and unify the dimensions
             observations = np.stack(observations, axis=0)       # (num_obs, total_timesteps)
             actions_behavior = np.stack(actions_behavior, axis=0) # (num_agents, total_timesteps)
-            tags = np.stack(tags, axis=0)                      # (num_agents, total_timesteps)
+            prompts = np.stack(prompts, axis=0)                      # (num_agents, total_timesteps)
             
 
             # Shape Check
@@ -458,35 +473,38 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
                 # Merge into (timesteps, num_relative_agents * 2)
                 agent_pairs = self._interleave_columns([agent_idx_vocabularize, agent_value_vocabularize])
                 
-                # meta_data: idx_policy, idx_tag, tag, idx_a_self, a_self, idx_reward, reward, idx_end_timestep/idx_reset(if reset)
+                # meta_data: idx_prompt, prompt, idx_a_self, a_self, (idx_reward, reward,) idx_end_timestep/idx_reset(if reset)
                 # meta_pairs in (num_timesteps)
-                idx_policy_vocabularize = self.vocabularize('special_token', 'idx_policy')
-                idx_policy_vocabularize = np.full((num_timesteps, 1), idx_policy_vocabularize, dtype=np.int64)
-                idx_tag_vocabularize = self.vocabularize('special_token', 'idx_tag')
-                idx_tag_vocabularize = np.full((num_timesteps, 1), idx_tag_vocabularize, dtype=np.int64)
+                idx_prompt_vocabularize = self.vocabularize('special_token', 'idx_prompt')
+                idx_prompt_vocabularize = np.full((num_timesteps, 1), idx_prompt_vocabularize, dtype=np.int64)
                 idx_a_self_vocabularize = self.vocabularize('special_token', 'idx_a_self')
                 idx_a_self_vocabularize = np.full((num_timesteps, 1), idx_a_self_vocabularize, dtype=np.int64)
-                idx_reward_vocabularize = self.vocabularize('special_token', 'idx_reward')
-                idx_reward_vocabularize = np.full((num_timesteps, 1), idx_reward_vocabularize, dtype=np.int64)
                 idx_end_timestep_vocabularize = self.vocabularize('special_token', 'idx_end_timestep')
                 idx_reset_vocabularize = self.vocabularize('special_token', 'idx_reset_env')
                 idx_end_timestep_vocabularize = np.where(resets.reshape(-1, 1), idx_reset_vocabularize, idx_end_timestep_vocabularize)
-                tags_vocabularize = self.vocabularize('tag_value', tags[agent_id][time_slice])
-                tags_vocabularize = tags_vocabularize[:, np.newaxis]
+                prompts_vocabularize = self.vocabularize('prompt_value', prompts[agent_id][time_slice])
+                prompts_vocabularize = prompts_vocabularize[:, np.newaxis]
                 agent_data_vocabularize = self.vocabularize('value', actions_behavior[agent_id][time_slice,:][np.newaxis, :]).squeeze()
                 agent_data_vocabularize = agent_data_vocabularize[:, np.newaxis]
-                rewards_vocabularize = self.vocabularize('value', rewards[time_slice][np.newaxis, :]).squeeze()
-                rewards_vocabularize = rewards_vocabularize[:, np.newaxis]
-                meta_pairs = np.concatenate([idx_policy_vocabularize, idx_tag_vocabularize, tags_vocabularize,
-                                             idx_a_self_vocabularize, agent_data_vocabularize,
-                                             idx_reward_vocabularize, rewards_vocabularize,
-                                             idx_end_timestep_vocabularize], axis= 1) # (num_timesteps, 8)               
+                if self.include_reward:
+                    idx_reward_vocabularize = self.vocabularize('special_token', 'idx_reward')
+                    idx_reward_vocabularize = np.full((num_timesteps, 1), idx_reward_vocabularize, dtype=np.int64)
+                    rewards_vocabularize = self.vocabularize('value', rewards[time_slice][np.newaxis, :]).squeeze()
+                    rewards_vocabularize = rewards_vocabularize[:, np.newaxis]
+                    meta_pairs = np.concatenate([idx_prompt_vocabularize, prompts_vocabularize,
+                                                idx_a_self_vocabularize, agent_data_vocabularize,
+                                                idx_reward_vocabularize, rewards_vocabularize,
+                                                idx_end_timestep_vocabularize], axis= 1) # (num_timesteps, 7) 
+                else:
+                    meta_pairs = np.concatenate([idx_prompt_vocabularize, prompts_vocabularize,
+                                                idx_a_self_vocabularize, agent_data_vocabularize,
+                                                idx_end_timestep_vocabularize], axis= 1) # (num_timesteps, 5)               
 
                 # Merge all data
-                agent_seq = np.concatenate([obs_pairs, agent_pairs, meta_pairs], axis=1) # (timesteps, num_relative_obs * 2 + num_relative_agents * 2 + 9)
-                agent_seq = agent_seq.reshape(-1) # (timesteps * (num_relative_obs * 2 + num_relative_agents * 2 + 9))
+                agent_seq = np.concatenate([obs_pairs, agent_pairs, meta_pairs], axis=1) # (timesteps, num_relative_obs * 2 + num_relative_agents * 2 + 5or7)
+                agent_seq = agent_seq.reshape(-1) # (timesteps * (num_relative_obs * 2 + num_relative_agents * 2 + 5or7))
                 
-                policy_position_mask = (agent_seq == self.vocabularize('special_token', 'idx_policy'))
+                policy_position_mask = (agent_seq == self.vocabularize('special_token', 'idx_a_self'))
                 label_vocabularize = self.vocabularize('value', actions_label[agent_id][time_slice][np.newaxis, :],
                                                        behavior_value = actions_behavior[agent_id][time_slice,:][np.newaxis, :]).squeeze()
                 if np.sum(policy_position_mask) != len(label_vocabularize):
@@ -515,7 +533,7 @@ def process_subdir(args):
     time_step = params['time_step']
     max_obs_num = params['max_obs_num']
     max_agent_num = params['max_agent_num']
-    tag_num = params['tag_num']
+    prompt_num = params['prompt_num']
     value_num = params['value_num']
     resolution = params['resolution']
     vocab_size = params['vocab_size']
@@ -527,7 +545,7 @@ def process_subdir(args):
             time_step=time_step,
             max_obs_num=max_obs_num,
             max_agent_num=max_agent_num,
-            tag_num=tag_num,
+            prompt_num=prompt_num,
             value_num=value_num,
             resolution=resolution,
             vocab_size=vocab_size,
@@ -565,7 +583,7 @@ def process_subdir(args):
         print(f"Error processing {sub_dir}: {str(e)}")
         return 0
 
-def main(load_dir, save_dir, time_step, max_obs_num, max_agent_num, tag_num, value_num, resolution, vocab_size, num_workers=None):
+def main(load_dir, save_dir, time_step, max_obs_num, max_agent_num, prompt_num, value_num, resolution, vocab_size, num_workers=None):
     os.makedirs(save_dir, exist_ok=True)
     
     sub_dirs = [d for d in os.listdir(load_dir) 
@@ -577,7 +595,7 @@ def main(load_dir, save_dir, time_step, max_obs_num, max_agent_num, tag_num, val
         'time_step': time_step,
         'max_obs_num': max_obs_num,
         'max_agent_num': max_agent_num,
-        'tag_num': tag_num,
+        'prompt_num': prompt_num,
         'value_num': value_num,
         'resolution': resolution,
         'vocab_size': vocab_size
@@ -637,8 +655,8 @@ if __name__ == "__main__":
                         help="Maximum observations parameter")
     parser.add_argument("--max_agent_num", type=int, required=True,
                         help="Maximum agents parameter")
-    parser.add_argument("--tag_num", type=int, required=True,
-                        help="Maximum tags parameter")
+    parser.add_argument("--prompt_num", type=int, required=True,
+                        help="Maximum prompts parameter")
     parser.add_argument("--value_num", type=int, required=True,
                         help="Value number parameter")
     parser.add_argument("--resolution", type=float, required=True,
@@ -655,7 +673,7 @@ if __name__ == "__main__":
         args.time_step,
         args.max_obs_num,
         args.max_agent_num,
-        args.tag_num,
+        args.prompt_num,
         args.value_num,
         args.resolution,
         args.vocab_size,
@@ -674,7 +692,7 @@ if __name__ == "__main__":
     #     time_step=args.time_step,
     #     max_obs_num=args.max_obs_num,
     #     max_agent_num=args.max_agent_num,
-    #     tag_num=args.tag_num,
+    #     prompt_num=args.prompt_num,
     #     value_num=args.value_num,
     #     resolution=args.resolution,
     #     vocab_size=args.vocab_size,

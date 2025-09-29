@@ -302,9 +302,9 @@ class HVACGenerator(GeneratorBase):
                         current_agent_seq.append(self.vocabularize('agent_id', related_agent))
                     current_agent_seq.append(obs_agent_vocabularize[related_agent])
                     # current_agent_seq.append(self.vocabularize('value', obs_agent[related_agent]))
-                # 3, Tag
-                current_agent_seq.append(self.vocabularize('special_token', 'idx_tag'))
-                current_agent_seq.append(self.vocabularize('tag_value', self.interactive_tag))
+                # 3, Prompt
+                current_agent_seq.append(self.vocabularize('special_token', 'idx_prompt'))
+                current_agent_seq.append(self.vocabularize('prompt_value', self.interactive_prompt))
                 # 4, Self action flag
                 current_agent_seq.append(self.vocabularize('special_token', 'idx_a_self'))
                 current_batch_seq.append(current_agent_seq)
@@ -312,16 +312,23 @@ class HVACGenerator(GeneratorBase):
             return current_batch_seq
         else:
             agent_action_vocabularize = self.vocabularize('value', action)[:,-1,:].squeeze()
-            reward_idx_vocabularize = self.vocabularize('special_token', 'idx_reward')
-            reward_vocabularize = self.vocabularize('value', reward)
+            if self.model.module.include_reward:
+                reward_idx_vocabularize = self.vocabularize('special_token', 'idx_reward')
+                reward_vocabularize = self.vocabularize('value', reward)
             timestep_end_vocabularize = self.vocabularize('special_token', 
                                              'idx_reset_env' if reset else 'idx_end_timestep')
-            to_add = numpy.array([
-                agent_action_vocabularize,                              # 5, Self action value
-                numpy.full(self.agent_num, reward_idx_vocabularize),   # 6, Reward idx and value
-                numpy.full(self.agent_num, reward_vocabularize),  
-                numpy.full(self.agent_num, timestep_end_vocabularize)  # 7, End
-            ], dtype=object).T  # (num_agents, 4)
+            if self.model.module.include_reward:
+                to_add = numpy.array([
+                    agent_action_vocabularize,                              # 5, Self action value
+                    numpy.full(self.agent_num, reward_idx_vocabularize),   # 6, Reward idx and value
+                    numpy.full(self.agent_num, reward_vocabularize),  
+                    numpy.full(self.agent_num, timestep_end_vocabularize)  # 7, End
+                ], dtype=object).T  # (num_agents, 4)
+            else:
+                to_add = numpy.array([
+                    agent_action_vocabularize,                             # 5, Self action value
+                    numpy.full(self.agent_num, timestep_end_vocabularize)  # 6, End
+                ], dtype=object).T  # (num_agents, 2)
             for i, seq in enumerate(current_batch_seq):
                 seq.extend(to_add[i])
             current_batch_seq = [[int(x) for x in lst] for lst in current_batch_seq]
@@ -405,7 +412,7 @@ class HVACGenerator(GeneratorBase):
                                                                    previous_action,
                                                                    current_batch_seq=vocab_seq_batch,
                                                                    action=combined_action,
-                                                                   reward=numpy.array(reward).reshape(1, 1, 1),
+                                                                   reward=None, #reward=numpy.array(reward).reshape(1, 1, 1),
                                                                    reset=done,
                                                                    use_diff_action=self.use_diff_action
                                                                    )

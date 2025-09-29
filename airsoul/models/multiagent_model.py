@@ -51,23 +51,29 @@ class OmniRL_MultiAgent(MultiAgentModel):
     Input format: List[idx]
     All of the id and value are transform into discrete integer values, forming the vocabular.
     - i.e., we have m obs_id, n action_id -> m + n words
-        idx_policy, idx_tag, idx_a_self, idx_reward, idx_end_timestep, idx_reset_env -> 6 words
-        t tag_value -> t words 
+        idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env -> 4 words
+        (If reward is included, idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env, idx_reward -> 5 words)
+        p prompt_value -> p words
         value of obs, action, and reward ~ [-15, 15], resolution 0.1 -> 300 words + 2 upper and lower words = 302 words
         off_action_id -> 1 word
         idx_padding -> 1 word
-        Then the total vocabular size = m + n + t + 310
+        Then the total vocabular size = m + n + p + 308
+        (If reward is included, Then the total vocabular size = m + n + p + 309)
         
 
     - For one timestep the sequence is arranged as: 
         [ idx_o1, o1, idx_o3, o3, idx_o4, o4, ..., 
         idx_a1, a1, idx_a2, a2, idx_a4, a4, ..., 
-        idx_policy, idx_tag, tag, idx_a_self, a_self, idx_reward, reward, idx_end_timestep ]
+        idx_prompt, prompt, idx_a_self, a_self, idx_end_timestep]
+        (If reward is included:
+        [ idx_o1, o1, idx_o3, o3, idx_o4, o4, ..., 
+        idx_a1, a1, idx_a2, a2, idx_a4, a4, ..., 
+        idx_prompt, prompt, idx_a_self, a_self, idx_reward, reward_value, idx_end_timestep])
 
         World Model (obs) position: idx_o1, idx_o3, idx_o4, ...
         World Model (action of other agent): idx_a1, idx_a2, idx_a4, ...
-        Policy Model: idx_policy
-        World Model (reward): idx_reward
+        Policy Model: idx_a_self
+        (If reward is included, World Model (reward) position: idx_reward)
 
     """
     def __init__(self, config, verbose=False): 
@@ -81,13 +87,17 @@ class OmniRL_MultiAgent(MultiAgentModel):
 
         self.nobs = config.nobs
         self.nagent = config.nagent
-        self.ntag = config.ntag
+        self.nprompt = config.nprompt
         self.value_num = config.value_num
-        self.default_tag = int(config.default_tag)
+        self.default_prompt = int(config.default_prompt)
+        self.include_reward = config.include_reward
 
-        # 6=idx_policy, idx_tag, idx_a_self, idx_reward, idx_end_timestep, idx_reset_env; 
+        # 4=idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env; include reward -> 4 + 1 = 5
         # 2=value blow botom bound and value above upper bound; 2=off_action_id, idx_padding
-        vocab_size = self.nobs + self.nagent + 6 + self.ntag + self.value_num + 2 + 2
+        if self.include_reward:
+            vocab_size = self.nobs + self.nagent + 5 + self.nprompt + self.value_num + 2 + 2
+        else:
+            vocab_size = self.nobs + self.nagent + 4 + self.nprompt + self.value_num + 2 + 2
         if not (config.word_embeddings.input_size == config.vocab_size == vocab_size):
             log_fatal(f"Word embeddings input size {config.word_embeddings.input_size} should be equal to vocab size {config.vocab_size} and {vocab_size}")
 
@@ -101,16 +111,23 @@ class OmniRL_MultiAgent(MultiAgentModel):
         self.OBS_IDX_OFFSET = 0
         self.AGENT_IDX_OFFSET = self.nobs
         self.SPECIAL_TOKENS_OFFSET = self.AGENT_IDX_OFFSET + self.nagent
-        self.SPECIAL_TOKENS = {
-            'idx_policy': 0,
-            'idx_tag': 1,
-            'idx_a_self': 2,
-            'idx_reward': 3,
-            'idx_end_timestep': 4,
-            'idx_reset_env': 5
-        }
-        self.TAG_BASE = self.SPECIAL_TOKENS_OFFSET + len(self.SPECIAL_TOKENS)
-        self.VALUE_BASE = self.TAG_BASE + self.ntag
+        if not self.include_reward:
+            self.SPECIAL_TOKENS = {
+                'idx_prompt': 0,
+                'idx_a_self': 1,
+                'idx_end_timestep': 2,
+                'idx_reset_env': 3
+            }
+        else:
+            self.SPECIAL_TOKENS = {
+                'idx_prompt': 0,
+                'idx_a_self': 1,
+                'idx_end_timestep': 2,
+                'idx_reset_env': 3,
+                'idx_reward': 4
+            }
+        self.PROMPT_BASE = self.SPECIAL_TOKENS_OFFSET + len(self.SPECIAL_TOKENS)
+        self.VALUE_BASE = self.PROMPT_BASE + self.nprompt
         self.ACTION_OFF_BASE = self.VALUE_BASE + self.value_num + 2
 
     def find_position(self, inputs):
@@ -118,20 +135,22 @@ class OmniRL_MultiAgent(MultiAgentModel):
         inputs: [batch_size, seq_len]
         World Model (obs) position: value in [0, nobs)
         World Model (action of other agent): value in [nobs, nagent)
-        Policy Model: value == nobs + nagent
-        World Model (reward): value == nobs + nagent + 3; (idx_policy, idx_tag, idx_a_self, idx_reward)
+        Policy Model: value == self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS['idx_a_self']
+        (If reward is inclued, World Model (reward): value == self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS['idx_reward'])
         return world_model_obs_out, world_model_action_out, policy_out, reward_out
         """
         world_model_obs_mask = (inputs < self.AGENT_IDX_OFFSET)
         world_model_action_mask = (inputs >= self.AGENT_IDX_OFFSET) & (inputs < self.SPECIAL_TOKENS_OFFSET)
         policy_mask = (inputs == self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS['idx_a_self'])
-        reward_mask = (inputs == (self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS['idx_reward']))
+        if self.include_reward:
+            reward_mask = (inputs == self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS['idx_reward'])
+            return world_model_obs_mask, world_model_action_mask, policy_mask, reward_mask
 
-        return world_model_obs_mask, world_model_action_mask, policy_mask, reward_mask
+        return world_model_obs_mask, world_model_action_mask, policy_mask
 
     def sequential_loss(self, inputs, label_actions, use_loss_weight=True, update_memory=True, reduce_dim=1):
         """
-        label_actions should have same shape as inputs, and replace the idx_policy with label action.
+        label_actions should have same shape as inputs, and replace the idx_a_self with label action.
         """
         seq_len = inputs.shape[1]
         ps = self.causal_model.position
@@ -142,18 +161,23 @@ class OmniRL_MultiAgent(MultiAgentModel):
 
         outputs, _ = self.forward(inputs, need_cache=False, update_memory=update_memory) #outputs: [batch_size, seq_len, vocab_size]
         outputs = outputs[:, :-1, :]
-        world_model_obs_mask, world_model_action_mask, policy_mask, reward_mask = self.find_position(inputs[:,:-1])
+        if self.include_reward:
+            world_model_obs_mask, world_model_action_mask, policy_mask, reward_mask = self.find_position(inputs[:,:-1])
+        else:
+            world_model_obs_mask, world_model_action_mask, policy_mask= self.find_position(inputs[:,:-1])
     
         
         loss_weight_wm_obs = world_model_obs_mask.float()
         loss_weight_wm_action = world_model_action_mask.float()
         loss_weight_policy = policy_mask.float()
-        loss_weight_reward = reward_mask.float()
+        if self.include_reward:
+            loss_weight_reward = reward_mask.float()
         if use_loss_weight:
             loss_weight_wm_obs *= self.loss_weight[ps:pe].unsqueeze(0)
             loss_weight_wm_action *= self.loss_weight[ps:pe].unsqueeze(0)
             loss_weight_policy *= self.loss_weight[ps:pe].unsqueeze(0)
-            loss_weight_reward *= self.loss_weight[ps:pe].unsqueeze(0)
+            if self.include_reward:
+                loss_weight_reward *= self.loss_weight[ps:pe].unsqueeze(0)
         
         loss = dict()
         loss["wm_obs"], loss["count_s"] = weighted_loss(outputs, 
@@ -174,12 +198,15 @@ class OmniRL_MultiAgent(MultiAgentModel):
                                        loss_wht=loss_weight_policy,
                                        reduce_dim=reduce_dim,
                                        need_cnt=True)
-        loss["reward"] = weighted_loss(outputs,
-                                       gt=inputs[:, 1:],
-                                       loss_type="ce",
-                                       loss_wht=loss_weight_reward,
-                                       reduce_dim=reduce_dim,
-                                       need_cnt=False)
+        if self.include_reward:
+            loss["reward"] = weighted_loss(outputs,
+                                        gt=inputs[:, 1:],
+                                        loss_type="ce",
+                                        loss_wht=loss_weight_reward,
+                                        reduce_dim=reduce_dim,
+                                        need_cnt=False)
+        else:
+            loss["reward"] = 0.0
         loss["ent"] = weighted_loss(outputs, 
                                         loss_type="ent", 
                                         loss_wht=loss_weight_policy,
@@ -193,15 +220,14 @@ class OmniRL_MultiAgent(MultiAgentModel):
             if agents have different seq lenth, padding with value self.nvocab: 
             [ idx_o1, o1, idx_o3, o3, idx_o4, o4, ..., 
             idx_a1, a1, idx_a2, a2, idx_a4, a4, ..., 
-            idx_policy, idx_padding ...]
+            idx_padding ...]
         1, Forward with inputs, update memory = False. Get wd_obs, wd_action, and action.
         2, if reward_prediction:
                 Form the sequences with action:
                     [ idx_o1, o1, idx_o3, o3, idx_o4, o4, ..., 
                     idx_a1, a1, idx_a2, a2, idx_a4, a4, ..., 
-                    idx_policy, idx_tag, tag, idx_a_self, action, idx_reward]
-                Forward again and get wd_reward.
-                return wd_obs, wd_action, action, wd_reward.
+                    idx_prompt, prompt, idx_a_self, action]
+                return wd_obs, wd_action, action.
             else:
                 reutrn wd_obs, wd_action, action
         """
@@ -220,6 +246,7 @@ class OmniRL_MultiAgent(MultiAgentModel):
             output = output.view(-1, D)  # [B*NT, D]
 
             mask = torch.zeros_like(output, dtype=torch.bool)
+            # TODO diff action resolution is 0.5, value range is ..., change mask
             start_idx = self.VALUE_BASE
             end_idx = self.VALUE_BASE + self.value_num + 2 # upper and lower value take two tokens
             mask[:, start_idx:end_idx] = True
@@ -256,24 +283,23 @@ class OmniRL_MultiAgent(MultiAgentModel):
             world_model_action = [act.numpy() for act in world_model_action]
             action = [a.numpy() for a in action]
 
-        if not reward_prediction:
+        if not reward_prediction or not self.include_reward:
             return world_model_obs, world_model_action, action
         else:
             new_value = torch.tensor([
-                [self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS['idx_tag'], self.default_tag, # idx_tag, tag
-                self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS['idx_a_self'], int(action[i].item()), # idx_a_self, a_self
+                [int(action[i].item()), #a_self
                 self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS['idx_reward']] # idx_reward
                 for i in range(BT)], dtype=torch.int64, device=inputs.device)
-            policy_idx = self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS['idx_policy']
-            new_nt = inputs.size(1) + 5
+            policy_idx = self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS['idx_a_self']
+            new_nt = inputs.size(1) + 2
             new_inputs = torch.zeros((BT, new_nt), dtype=torch.int64, device=inputs.device)
             for i in range(BT):
                 pos = torch.where(inputs[i] == policy_idx)[0]
                 assert pos >= 0 and pos < inputs.size(1), f"idle position for policy_idx: {pos}"
                 new_inputs[i, :pos+1] = inputs[i, :pos+1]
-                new_inputs[i, pos+1:pos+6] = new_value[i]
+                new_inputs[i, pos+1:pos+3] = new_value[i]
                 if pos < inputs.size(1) -1:
-                    new_inputs[i, pos+6:] = inputs[i, pos+1:]
+                    new_inputs[i, pos+3:] = inputs[i, pos+1:]
             outputs, _ = self.forward(new_inputs, need_cache=False, update_memory=False)
             outputs = get_value(outputs)
             _, _, _, reward_mask = self.find_position(new_inputs)
@@ -290,7 +316,7 @@ class OmniRL_MultiAgent(MultiAgentModel):
         inputs : tensor with shape [1, NT], only support 1 batch for now: 
             [ idx_o1, o1, idx_o3, o3, idx_o4, o4, ..., 
             idx_a1, a1, idx_a2, a2, idx_a4, a4, ..., 
-            idx_policy, idx_tag, tag, idx_a_self, a_self, idx_reward]
+            idx_prompt, prompt, idx_a_self, a_self, (idx_reward, reward,) end_timestep]
         """
         device = next(self.parameters()).device
         if not torch.is_tensor(inputs):
