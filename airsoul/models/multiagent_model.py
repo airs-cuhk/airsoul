@@ -54,11 +54,11 @@ class OmniRL_MultiAgent(MultiAgentModel):
         idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env -> 4 words
         (If reward is included, idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env, idx_reward -> 5 words)
         p prompt_value -> p words
-        value of obs, action, and reward ~ [-15, 15], resolution 0.1 -> 300 words + 2 upper and lower words = 302 words
+        value of obs, action, and reward ~ [-16, 16], resolution 0.1 -> 320 words + 2 upper and lower words = 322 words
         off_action_id -> 1 word
         idx_padding -> 1 word
-        Then the total vocabular size = m + n + p + 308
-        (If reward is included, Then the total vocabular size = m + n + p + 309)
+        Then the total vocabular size = m + n + p + 333
+        (If reward is included, Then the total vocabular size = m + n + p + 334)
         
 
     - For one timestep the sequence is arranged as: 

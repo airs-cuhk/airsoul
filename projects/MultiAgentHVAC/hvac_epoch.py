@@ -283,10 +283,23 @@ class HVACGenerator(GeneratorBase):
             # [num, value] -> [num, 1, value]
             obs_sensor = obs_sensor[:,numpy.newaxis,numpy.newaxis]
             obs_sensor_vocabularize = self.vocabularize('value', obs_sensor).squeeze()
-            obs_agent_vocabularize = self.vocabularize('value', obs_agent)[:,-1:,:].squeeze()
+            obs_agent_vocabularize = self.vocabularize('value', obs_agent, use_diff_action=False)[:,-1:,:].squeeze()
             for agent_id in range(self.agent_num):
                 current_agent_seq = []
-                # 1, Related sensor idx and value
+                # 1, Related agent idx and value
+                if use_relative_idx:
+                    current_agent_seq.append(self.vocabularize('agent_id', 0))
+                else:
+                    current_agent_seq.append(self.vocabularize('agent_id', agent_id))
+                current_agent_seq.append(obs_agent_vocabularize[agent_id])
+                for i, related_agent in enumerate(self.related_agent[agent_id]):
+                    if use_relative_idx:
+                        current_agent_seq.append(self.vocabularize('agent_id', i+1))
+                    else:
+                        current_agent_seq.append(self.vocabularize('agent_id', related_agent))
+                    current_agent_seq.append(obs_agent_vocabularize[related_agent])
+                    # current_agent_seq.append(self.vocabularize('value', obs_agent[related_agent]))
+                # 2, Related sensor idx and value
                 for i, related_obs in enumerate(self.related_sensor[agent_id]):
                     if use_relative_idx:
                         current_agent_seq.append(self.vocabularize('obs_id', i))
@@ -294,14 +307,6 @@ class HVACGenerator(GeneratorBase):
                         current_agent_seq.append(self.vocabularize('obs_id', related_obs))
                     current_agent_seq.append(obs_sensor_vocabularize[related_obs])
                     # current_agent_seq.append(self.vocabularize('value', obs_sensor[related_obs]))
-                # 2, Related agent idx and value
-                for i, related_agent in enumerate(self.related_agent[agent_id]):
-                    if use_relative_idx:
-                        current_agent_seq.append(self.vocabularize('agent_id', i))
-                    else:
-                        current_agent_seq.append(self.vocabularize('agent_id', related_agent))
-                    current_agent_seq.append(obs_agent_vocabularize[related_agent])
-                    # current_agent_seq.append(self.vocabularize('value', obs_agent[related_agent]))
                 # 3, Prompt
                 current_agent_seq.append(self.vocabularize('special_token', 'idx_prompt'))
                 current_agent_seq.append(self.vocabularize('prompt_value', self.interactive_prompt))
@@ -311,7 +316,7 @@ class HVACGenerator(GeneratorBase):
             current_batch_seq = [[int(x) for x in lst] for lst in current_batch_seq]
             return current_batch_seq
         else:
-            agent_action_vocabularize = self.vocabularize('value', action)[:,-1,:].squeeze()
+            agent_action_vocabularize = self.vocabularize('value', action, use_diff_action=True)[:,-1,:].squeeze()
             if self.model.module.include_reward:
                 reward_idx_vocabularize = self.vocabularize('special_token', 'idx_reward')
                 reward_vocabularize = self.vocabularize('value', reward)
