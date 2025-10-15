@@ -77,11 +77,11 @@ class MultiAgentDataSet(Dataset):
         idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env -> 4 words
         (If reward is included, idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env, idx_reward -> 5 words)
         p prompt_value -> p words (p=3)
-        value of obs, action, and reward ~ [-10, 10], resolution 0.1, upper and lower -> 202 words 
+        value of obs, action, and reward ~ [-16, 16], resolution 0.1, upper and lower -> 322 words 
         off_action_id -> 1 word
         idx_padding -> 1 word
-        Then the total vocabular size = m + n + p + 308
-        (If reward is included, Then the total vocabular size = m + n + p + 309)
+        Then the total vocabular size = m + n + p + 4 + 322 + 1 + 1
+        (If reward is included, Then the total vocabular size = m + n + p + 334)
         
     - For one timestep the sequence is arranged as: 
         [ idx_o1, o1, idx_o3, o3, idx_o4, o4, ..., 
@@ -129,6 +129,7 @@ class MultiAgentDataSet(Dataset):
         self._init_vocab_offsets()
 
         if(verbose):
+            print(self.file_list)
             print("...finished initializing data set, number of samples: %s\n" % len(self.file_list))
 
     def __len__(self):
@@ -158,29 +159,29 @@ class MultiAgentDataSet(Dataset):
         self.VALUE_BASE = self.PROMPT_BASE + self.prompt_num
         self.ACTION_OFF_BASE = self.VALUE_BASE + self.value_num + 2 # 2: lower and upper value
 
-    def vocabularize(self, type, value, behavior_value=None,value_previous=None,use_diff_action=True):
+    def vocabularize(self, type, value, behavior_value=None,value_previous=None,use_diff_action=False):
         handler = getattr(self, f'_handle_{type}', None)
         if handler:
             if behavior_value is not None:
                 return handler(value,behavior_value, use_diff_action=use_diff_action)
             if value_previous is not None:
                 return handler(value,value_previous, use_diff_action=use_diff_action)
-            return handler(value)
+            return handler(value, use_diff_action=use_diff_action)
         raise ValueError(f"Invalid type: {type}")
 
-    def _handle_obs_id(self, value):
+    def _handle_obs_id(self, value, use_diff_action=False):
         return value
 
-    def _handle_agent_id(self, value):
+    def _handle_agent_id(self, value, use_diff_action=False):
         return self.AGENT_IDX_OFFSET + value
 
-    def _handle_special_token(self, token_type):
+    def _handle_special_token(self, token_type, use_diff_action=False):
         return self.SPECIAL_TOKENS_OFFSET + self.SPECIAL_TOKENS[token_type]
 
-    def _handle_prompt_value(self, value):
+    def _handle_prompt_value(self, value, use_diff_action=False):
         return self.PROMPT_BASE + value
 
-    def _handle_value(self, value, behavior_value = None, use_diff_action = True):
+    def _handle_value(self, value, behavior_value = None, use_diff_action=False):
         # value in (batch, timestep, value) shape
         scalar_input = False
         if not isinstance(value, np.ndarray):
@@ -373,13 +374,13 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
     def __init__(self, directory, time_step, max_obs_num, max_agent_num, prompt_num, value_num, resolution, vocab_size, verbose=False):
         super().__init__(directory, time_step, max_obs_num, max_agent_num, prompt_num, value_num, resolution, vocab_size, verbose)
 
-    def _handle_obs_id(self, value):
+    def _handle_obs_id(self, value, use_diff_action=False):
         return value.astype(np.int64) if isinstance(value, np.ndarray) else int(value)
 
-    def _handle_agent_id(self, value):
+    def _handle_agent_id(self, value, use_diff_action=False):
         return (self.AGENT_IDX_OFFSET + value).astype(np.int64) if isinstance(value, np.ndarray) else self.AGENT_IDX_OFFSET + value
 
-    def _handle_prompt_value(self, value):
+    def _handle_prompt_value(self, value, use_diff_action=False):
         return (self.PROMPT_BASE + value).astype(np.int64) if isinstance(value, np.ndarray) else self.PROMPT_BASE + value
 
     def _interleave_columns(self, arrays):
@@ -414,13 +415,12 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
                         rewards.shape[0], 
                         actions_behavior[0].shape[0],
                         observations[0].shape[0],
-                        prompts[0].shape[0])
+                        prompts.shape[0])
             num_agents = actions_behavior.shape[0]
 
             # Convert to a numpy array and unify the dimensions
             observations = np.stack(observations, axis=0)       # (num_obs, total_timesteps)
             actions_behavior = np.stack(actions_behavior, axis=0) # (num_agents, total_timesteps)
-            prompts = np.stack(prompts, axis=0)                      # (num_agents, total_timesteps)
             
 
             # Shape Check
@@ -433,6 +433,8 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
                 n_e = self.time_step
 
             time_slice = slice(n_b, n_e)
+            time_slice_last_action = slice(n_b, n_e)
+            time_slice_current_action = slice(n_b + 1, n_e + 1)
             num_timesteps = n_e - n_b
             # Get the associated indexes of all agents
             obs_conn_mask = [obs_matrix[i].astype(bool) for i in range(num_agents)]
@@ -459,11 +461,15 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
                 obs_pairs = self._interleave_columns([obs_idx_vocabularize, obs_value_vocabularize])
 
                 # Other agent -> [agent_id, value] × timesteps
-                agent_data = actions_behavior[agent_mask][:, time_slice] # (num_relative_agents, timesteps)
+                agent_data = actions_behavior[agent_mask][:, time_slice_last_action] # (num_relative_agents, timesteps)
                 relevant_agents = np.where(agent_mask)[0] # (num_relative_agents)
-                
+                # Self last action
+                self_last_action = np.expand_dims(actions_behavior[agent_id][time_slice_last_action], axis=0) # (1, timesteps)
+                agent_data = np.concatenate([self_last_action, agent_data], axis=0) # (1 + num_relative_agents, timesteps)
+                relevant_agents = np.insert(relevant_agents, 0, agent_id) # (1 + num_relative_agents)
+
                 agent_idx_vocabularize = self.vocabularize('agent_id', relevant_agents)
-                agent_value_vocabularize = self.vocabularize('value', agent_data).squeeze()
+                agent_value_vocabularize = self.vocabularize('value', agent_data, use_diff_action=False).squeeze()
                 if use_relative_idx:
                     agent_idx_vocabularize = np.arange(len(agent_idx_vocabularize)) + self.AGENT_IDX_OFFSET
                 agent_idx_vocabularize = np.broadcast_to(agent_idx_vocabularize[:, np.newaxis],
@@ -482,9 +488,10 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
                 idx_end_timestep_vocabularize = self.vocabularize('special_token', 'idx_end_timestep')
                 idx_reset_vocabularize = self.vocabularize('special_token', 'idx_reset_env')
                 idx_end_timestep_vocabularize = np.where(resets.reshape(-1, 1), idx_reset_vocabularize, idx_end_timestep_vocabularize)
-                prompts_vocabularize = self.vocabularize('prompt_value', prompts[agent_id][time_slice])
+                prompts_vocabularize = self.vocabularize('prompt_value', prompts[time_slice]).squeeze()
                 prompts_vocabularize = prompts_vocabularize[:, np.newaxis]
-                agent_data_vocabularize = self.vocabularize('value', actions_behavior[agent_id][time_slice,:][np.newaxis, :]).squeeze()
+                agent_data_vocabularize = self.vocabularize('value', actions_behavior[agent_id][time_slice_current_action,:][np.newaxis, :],
+                                                            use_diff_action=True).squeeze()
                 agent_data_vocabularize = agent_data_vocabularize[:, np.newaxis]
                 if self.include_reward:
                     idx_reward_vocabularize = self.vocabularize('special_token', 'idx_reward')
@@ -501,12 +508,13 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
                                                 idx_end_timestep_vocabularize], axis= 1) # (num_timesteps, 5)               
 
                 # Merge all data
-                agent_seq = np.concatenate([obs_pairs, agent_pairs, meta_pairs], axis=1) # (timesteps, num_relative_obs * 2 + num_relative_agents * 2 + 5or7)
+                agent_seq = np.concatenate([agent_pairs, obs_pairs, meta_pairs], axis=1) # (timesteps, num_relative_obs * 2 + num_relative_agents * 2 + 5or7)
                 agent_seq = agent_seq.reshape(-1) # (timesteps * (num_relative_obs * 2 + num_relative_agents * 2 + 5or7))
                 
                 policy_position_mask = (agent_seq == self.vocabularize('special_token', 'idx_a_self'))
-                label_vocabularize = self.vocabularize('value', actions_label[agent_id][time_slice][np.newaxis, :],
-                                                       behavior_value = actions_behavior[agent_id][time_slice,:][np.newaxis, :]).squeeze()
+                label_vocabularize = self.vocabularize('value', actions_label[agent_id][time_slice_current_action][np.newaxis, :],
+                                                       behavior_value = actions_behavior[agent_id][time_slice_current_action,:][np.newaxis, :],
+                                                       use_diff_action=True).squeeze()
                 if np.sum(policy_position_mask) != len(label_vocabularize):
                     raise ValueError(
                         f"Agent {agent_id} poilicy position count ({np.sum(policy_position_mask)}) "
@@ -698,6 +706,13 @@ if __name__ == "__main__":
     #     vocab_size=args.vocab_size,
     #     verbose=True
     # )
-    # sub_path = os.path.join(args.load_dir, sub_dirs[122])
+    # sub_path = os.path.join(args.load_dir, sub_dirs[0])
     # results = dataset._load_and_process_data(sub_path)
+    # for i, (sequence, label_action) in enumerate(results):
+    #         record_name = f"record_000000"
+    #         record_path = os.path.join(args.save_dir, record_name)
+    #         os.makedirs(record_path, exist_ok=True)
+            
+    #         np.save(os.path.join(record_path, "sequence.npy"), sequence)
+    #         np.save(os.path.join(record_path, "label_action.npy"), label_action)
 
