@@ -29,7 +29,7 @@ def validate_env_with_pid(env, task, max_steps=20000):
     step_count = 0
     
     while (not terminated) and (not truncated) and (step_count < max_steps):
-        action = 1 - agent.policy(obs[:n_sensors])[n_coolers:]
+        action = 1 - agent.policy(obs["sensor_readings"])[n_coolers:]
         
         obs, reward, terminated, truncated, info = env.step(action)
         step_count += 1

@@ -42,9 +42,9 @@ class HVACRLTrainer:
             "sac": SAC
         }
         policy_type_map = {
-            "ppo": "MlpPolicy",
-            "rppo": "MlpLstmPolicy",
-            "sac": "MlpPolicy"
+            "ppo": "MultiInputPolicy",
+            "rppo": "MultiInputLstmPolicy",
+            "sac": "MultiInputPolicy"
         }
         
         if self.algorithm not in policy_map:
@@ -273,11 +273,23 @@ class HVACRLTester:
         Return:
             Action array (one-dimensional)
         """
-        if not isinstance(obs, np.ndarray):
-            obs = np.array(obs, dtype=np.float32)
         
-        obs = obs[np.newaxis, :]
-        
-        action, _ = self.model.predict(obs, deterministic=deterministic)
+        if self.algorithm == "rppo":
+            if self._episode_start:
+                episode_start = np.array([True])
+                self._episode_start = False
+            else:
+                episode_start = np.array([False])
+            action, self._last_lstm_states = self.model.predict(obs, 
+                                                                state=self._last_lstm_states, 
+                                                                episode_start=episode_start, 
+                                                                deterministic=deterministic)
+        else:
+            action, _ = self.model.predict(obs, deterministic=deterministic)
         
         return action[0]
+    
+    def reset(self):
+        if self.algorithm == "rppo":
+            self._episode_start = True
+            self._last_lstm_states = None
