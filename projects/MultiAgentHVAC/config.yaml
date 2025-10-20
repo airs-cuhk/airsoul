@@ -15,13 +15,13 @@ model_config:
   max_position_loss_weighting: 128000
   policy_loss_type: CrossEntropy
 
-  vocab_size: 236 # nobs + nagent + ntag + value_num + 10
+  vocab_size: 352 
   nobs: 10
   nagent: 10
-  ntag: 6
-  default_tag: 5
-  value_num: 200
+  nprompt: 4
+  value_num: 320
   resolution: 0.1
+  include_reward: False
 
   word_embeddings:
       model_type: MLP
@@ -206,7 +206,8 @@ generator_config:
     vocab:
         max_obs_num: 10
         max_agent_num: 10
-        tag_num: 6
-        value_num: 300
+        prompt_num: 4
+        value_num: 320
         resolution: 0.1
-        vocab_size: 236
+        vocab_size: 352
+    default_prompt: 1

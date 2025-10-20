@@ -240,6 +240,7 @@ class HVACGenerator(GeneratorBase):
         )
         self.vocabularize = self.dataset.vocabularize
         self.use_diff_action = True
+        self.interactive_prompt = self.config.default_prompt
     
     def epoch_end(self, epoch_id):
         pass
@@ -374,8 +375,6 @@ class HVACGenerator(GeneratorBase):
 
         trail = 0
         total_step = 0
-
-        self.interactive_tag = 5 # tag_num = 6
 
         if self.config.learn_from_data:
             self.in_context_learn_from_teacher(epoch_id)
