@@ -8,6 +8,7 @@ from airsoul.utils import Logger, log_progress, log_debug, log_warn, log_fatal
 from airsoul.utils import DistStatistics, downsample
 from airsoul.utils import EpochManager, GeneratorBase, Logger
 from airsoul.dataloader import MultiAgentLoadDateSet, MultiAgentDataSetVetorized
+from data.anyhvac import create_cooler_cooler_graph, create_cooler_sensor_graph
 
 from xenoverse.anyhvacv2.anyhvac_sampler import HVACTaskSampler
 from xenoverse.anyhvacv2.anyhvac_env_vis import HVACEnvVisible, HVACEnv
@@ -257,18 +258,24 @@ class HVACGenerator(GeneratorBase):
         self.env.set_task(task)
 
         knn = 3
-        obs_graph = self.env._create_cooler_sensor_graph(knn)
-        agent_graph = self.env._create_cooler_cooler_graph(knn)
+        obs_graph = create_cooler_sensor_graph(self.env, knn)
+        agent_graph = create_cooler_cooler_graph(self.env, knn)
         self.agent_num, self.sensor_num = obs_graph.shape
         self.related_sensor = numpy.zeros((self.agent_num, knn), dtype=numpy.int32)
         self.related_agent = numpy.zeros((self.agent_num, knn), dtype=numpy.int32)
         for i in range(self.agent_num):
-            sensor_indices = numpy.where(obs_graph[i] == 1)[0]
-            agent_indices = numpy.where(agent_graph[i] == 1)[0]
+            sensor_indices = numpy.where(obs_graph[i] > 0)[0]
+            sensor_weights = obs_graph[i][sensor_indices]
+            sensor_sorted_indices = numpy.argsort(sensor_weights)
+            sensor_indices = sensor_indices[sensor_sorted_indices]
+            agent_indices = numpy.where(agent_graph[i] > 0)[0]
+            agent_weights = agent_graph[i][agent_indices]
+            agent_sorted_indices = numpy.argsort(agent_weights)
+            agent_indices = agent_indices[agent_sorted_indices]
             self.related_sensor[i] = sensor_indices
             self.related_agent[i] = agent_indices
 
-        self.env._create_agent_target_temperture()
+        self.env._create_agent_target_temperture(obs_graph)
 
         return task_id
     

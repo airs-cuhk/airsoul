@@ -436,9 +436,20 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
             time_slice_last_action = slice(n_b, n_e)
             time_slice_current_action = slice(n_b + 1, n_e + 1)
             num_timesteps = n_e - n_b
-            # Get the associated indexes of all agents
-            obs_conn_mask = [obs_matrix[i].astype(bool) for i in range(num_agents)]
-            agent_conn_mask = [agent_matrix[i].astype(bool) for i in range(num_agents)]
+            # Get the associated and sorted indexes of all agents
+            obs_conn_mask = []
+            agent_conn_mask = []
+            for agent_id in range(num_agents):
+                sensor_indices = np.where(obs_matrix[agent_id] > 0)[0]
+                sensor_weights = obs_matrix[agent_id][sensor_indices]
+                sensor_sorted_indices = np.argsort(sensor_weights)
+                sensor_indices = sensor_indices[sensor_sorted_indices]
+                agent_indices = np.where(agent_matrix[agent_id] > 0)[0]
+                agent_weights = agent_matrix[agent_id][agent_indices]
+                agent_sorted_indices = np.argsort(agent_weights)
+                agent_indices = agent_indices[agent_sorted_indices]
+                obs_conn_mask.append(sensor_indices)
+                agent_conn_mask.append(agent_indices)
 
             sequence_list = []
             for agent_id in range(num_agents):
@@ -448,7 +459,7 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
 
                 # Obs -> [obs_id, value] × timesteps
                 obs_data = observations[obs_mask][:, time_slice] # (num_relative_obs, timesteps)
-                relevant_obs = np.where(obs_mask)[0] # (num_relative_obs)
+                relevant_obs = obs_mask # (num_relative_obs)
                 obs_idx_vocabularize = self.vocabularize('obs_id', relevant_obs)
                 obs_value_vocabularize = self.vocabularize('value', obs_data).squeeze()
                 if use_relative_idx:
@@ -462,7 +473,7 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
 
                 # Other agent -> [agent_id, value] × timesteps
                 agent_data = actions_behavior[agent_mask][:, time_slice_last_action] # (num_relative_agents, timesteps)
-                relevant_agents = np.where(agent_mask)[0] # (num_relative_agents)
+                relevant_agents = agent_mask # (num_relative_agents)
                 # Self last action
                 self_last_action = np.expand_dims(actions_behavior[agent_id][time_slice_last_action], axis=0) # (1, timesteps)
                 agent_data = np.concatenate([self_last_action, agent_data], axis=0) # (1 + num_relative_agents, timesteps)

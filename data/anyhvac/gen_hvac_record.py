@@ -13,6 +13,64 @@ from xenoverse.anyhvac.anyhvac_env import HVACEnvDiffAction
 from xenoverse.anyhvac.anyhvac_solver import HVACSolverGTPID
 from rl_trainer_hvac import HVACRLTester
 
+def create_cooler_sensor_graph(env, num_closest_sensors: int = 3):
+    """
+    Create sensor-cooler relationship graph.
+
+    Args:
+        num_closest_sensors (int): The number of closest sensors to consider for each cooler.
+                                    Defaults to 3.
+
+    Returns:
+        np.ndarray: The sensor-cooler relationship graph.
+    """
+    # Create a new matrix with the same shape as the original (cooler, sensor) matrix
+    obs_graph = np.zeros_like(env.cooler_sensor_topology)
+    n_coolers, n_sensors = env.cooler_sensor_topology.shape
+    
+    for cooler_id in range(n_coolers):
+        sensor_weights = env.cooler_sensor_topology[cooler_id, :]
+        if n_sensors >= num_closest_sensors:
+            # Get the indices of the 'num_closest_sensors' smallest values (closest sensors)
+            closest_sensor_idx = np.argpartition(sensor_weights, num_closest_sensors)[:num_closest_sensors]
+            sorted_indices = closest_sensor_idx[np.argsort(sensor_weights[closest_sensor_idx])]
+        else:
+            # If there are fewer than 'num_closest_sensors' sensors, use all sensors
+            sorted_indices = np.argsort(sensor_weights)[:n_sensors]
+        
+        # Set the positions corresponding to the closest sensors to 1
+        for rank, sensor_idx in enumerate(sorted_indices, start=1):
+            obs_graph[cooler_id, sensor_idx] = rank
+    
+    return obs_graph
+
+def create_cooler_cooler_graph(env, num_closest_coolers: int = 3):
+    """
+    Create cooler-cooler relationship graph using KNN.
+
+    Args:
+        k_nearest_coolers (int): The number of nearest coolers to consider for each cooler.
+                                    Defaults to 3.
+
+    Returns:
+        np.ndarray: The cooler-cooler relationship graph.
+    """
+    agent_graph = np.zeros_like(env.cooler_topology)
+    n_coolers, n_coolers = env.cooler_topology.shape
+    
+    for cooler_id in range(n_coolers):
+        cooler_weights = env.cooler_topology[cooler_id, :]
+        cooler_weights[cooler_id] = np.inf
+        available_coolers = n_coolers - 1
+        actual_num_closest = min(num_closest_coolers, available_coolers)
+        if actual_num_closest > 0:
+            closest_cooler_idx = np.argpartition(cooler_weights, actual_num_closest)[:actual_num_closest]
+            sorted_indices = closest_cooler_idx[np.argsort(cooler_weights[closest_cooler_idx])]
+            for rank, cooler_idx in enumerate(sorted_indices, start=1):
+                agent_graph[cooler_id, cooler_idx] = rank
+    
+    return agent_graph
+
 class HVACDataGenerator:
     def __init__(self,
                  epoch_id=0,
@@ -37,7 +95,6 @@ class HVACDataGenerator:
                     self.pid_self_regression = False
                 self.env = HVACEnvDiffAction(reward_mode=env_reward_mode)
                 self.env.set_task(task)
-                self.cooler_sensor_topology = self.env.cooler_sensor_topology
                 self.n_sensors = len(self.env.sensors)
                 self.n_coolers = len(self.env.coolers)
                 self.n_heaters = len(self.env.equipments)
@@ -69,79 +126,6 @@ class HVACDataGenerator:
         if not self.pid_self_regression:
             self.rl_model.reset()
         return obs, info
-
-    def _create_sensor_cooler_graph(self, num_closest_sensors: int = 3):
-        """
-        Create sensor-cooler relationship graph.
-
-        Args:
-            num_closest_sensors (int): The number of closest sensors to consider for each cooler.
-                                       Defaults to 3.
-
-        Returns:
-            np.ndarray: The sensor-cooler relationship graph.
-        """
-        # Create a new matrix with the same shape as the original (cooler, sensor) matrix
-        obs_graph_orig = np.zeros_like(self.cooler_sensor_topology)
-        n_coolers, n_sensors = self.cooler_sensor_topology.shape
-        
-        for cooler_id in range(n_coolers):
-            sensor_weights = self.cooler_sensor_topology[cooler_id, :]
-            if n_sensors >= num_closest_sensors:
-                # Get the indices of the 'num_closest_sensors' smallest values (closest sensors)
-                closest_sensor_idx = np.argpartition(sensor_weights, num_closest_sensors)[:num_closest_sensors]
-            else:
-                # If there are fewer than 'num_closest_sensors' sensors, use all sensors
-                closest_sensor_idx = np.arange(len(sensor_weights))
-            
-            # Set the positions corresponding to the closest sensors to 1
-            obs_graph_orig[cooler_id, closest_sensor_idx] = 1.0
-        
-        # Transpose the matrix to match the required shape (sensor, cooler)
-        obs_graph = obs_graph_orig.T.astype(np.float32)
-        return obs_graph
-
-    def _create_cooler_cooler_graph(self, k_nearest_coolers: int = 3):
-        """
-        Create cooler-cooler relationship graph using KNN.
-
-        Args:
-            k_nearest_coolers (int): The number of nearest coolers to consider for each cooler.
-                                     Defaults to 3.
-
-        Returns:
-            np.ndarray: The cooler-cooler relationship graph.
-        """
-        n_coolers = self.n_coolers
-        agent_graph = np.zeros((n_coolers, n_coolers), dtype=np.float32)
-        
-        # Get cooler positions
-        # Assuming self.env.coolers is an iterable of objects with a 'loc' attribute
-        cooler_positions = np.array([cooler.loc for cooler in self.env.coolers])
-        
-        # Compute pairwise distances
-        for i in range(n_coolers):
-            for j in range(n_coolers):
-                if i != j:
-                    dist = np.linalg.norm(cooler_positions[i] - cooler_positions[j])
-                    agent_graph[i, j] = dist
-        
-        # Convert to KNN graph (k='k_nearest_coolers' nearest neighbors)
-        k = min(k_nearest_coolers, n_coolers - 1)
-        for i in range(n_coolers):
-            # Get k nearest neighbors
-            distances = agent_graph[i, :]
-            nearest_indices = np.argsort(distances)[1:k+1]  # Exclude self
-            
-            # Set connections
-            agent_graph[i, :] = 0
-            agent_graph[i, nearest_indices] = 1
-        
-        # Make symmetric and add self-connections (if desired, currently commented out)
-        # agent_graph = np.maximum(agent_graph, agent_graph.T)
-        # np.fill_diagonal(agent_graph, 1.0) # Uncomment if self-connections are needed
-        
-        return agent_graph
     
     def _compute_temperature_deviation(self, sensor_readings):
         target_temp = self.env.target_temperature
@@ -153,7 +137,7 @@ class HVACDataGenerator:
         return temperature_deviation
 
     def _compute_action_temperature_differences_with_graph(self, behavior_temp_settings, reference_temp_settings, 
-                                                          obs_graph):
+                                                          cooler_sensor_graph):
         """
         Use obs_graph to calculate the difference between the temperature setting value of each cooler and the target temperatures of its nearest k sensors
         
@@ -173,9 +157,8 @@ class HVACDataGenerator:
         target_temp = self.env.target_temperature
         if isinstance(target_temp, (list, np.ndarray)):
             target_temps = np.array(target_temp)
-            cooler_sensor_graph = obs_graph.T
             for cooler_idx in range(n_coolers):
-                connected_sensors = np.where(cooler_sensor_graph[cooler_idx] == 1.0)[0]
+                connected_sensors = np.where(cooler_sensor_graph[cooler_idx] > 0)[0]
                 
                 if len(connected_sensors) > 0:
                     avg_target_temp = np.mean(target_temps[connected_sensors])
@@ -210,8 +193,8 @@ class HVACDataGenerator:
         num_closest_sensors = random.randint(3,5)
         num_closest_coolers = random.randint(3,5)
 
-        self.obs_graph = self._create_sensor_cooler_graph(num_closest_sensors)
-        self.agent_graph = self._create_cooler_cooler_graph(num_closest_sensors)
+        self.agent_sensor_graph = create_cooler_sensor_graph(self.env, num_closest_sensors)
+        self.agent_agent_graph = create_cooler_cooler_graph(self.env, num_closest_sensors)
 
         default_action = self.env.last_action
         default_action_switch = default_action["switch"] 
@@ -223,7 +206,7 @@ class HVACDataGenerator:
         default_action_diff_behavior, default_action_diff_reference = self._compute_action_temperature_differences_with_graph(
                 default_action_temp, 
                 default_action_temp,
-                self.obs_graph
+                self.agent_sensor_graph
             )
         default_action_diff = np.array([default_action_diff_behavior, default_action_switch], dtype=np.float32)
         diff_actions_behavior.append(default_action_diff)
@@ -242,7 +225,7 @@ class HVACDataGenerator:
                 if self.pid_self_regression:
                     behavior_action = 1 - self.pid_solver.policy(obs["sensor_readings"])[self.n_coolers:]
                 else:
-                    behavior_action = self.rl_model.predict(obs)
+                    behavior_action = self.rl_model.predict(obs, deterministic=False)
                 reference_action = behavior_action
             
             behavior_action = np.array(behavior_action).flatten()
@@ -261,7 +244,7 @@ class HVACDataGenerator:
             diff_temp_behavior, diff_temp_reference = self._compute_action_temperature_differences_with_graph(
                 behavior_temp_settings, 
                 reference_temp_settings,
-                self.obs_graph
+                self.agent_sensor_graph
             )
 
             if self.verbose:
@@ -315,8 +298,8 @@ class HVACDataGenerator:
             print(f"  rewards: {rewards.shape}")
             print(f"  prompts: {prompts.shape}")
             print(f"  resets: {resets.shape}")
-            print(f"  obs_graph: {self.obs_graph.shape}")
-            print(f"  agent_graph: {self.agent_graph.shape}")
+            print(f"  obs_graph: {self.agent_sensor_graph.shape}")
+            print(f"  agent_graph: {self.agent_agent_graph.shape}")
 
         processed_data = {
             "observations": observations,
@@ -328,8 +311,8 @@ class HVACDataGenerator:
             "prompts": prompts,
             "rewards": rewards,
             "resets": resets,
-            "obs_graph": self.obs_graph,
-            "agent_graph": self.agent_graph,
+            "obs_graph": self.agent_sensor_graph,
+            "agent_graph": self.agent_agent_graph,
         }
 
         reorganized_data = self.reorganize_data_by_agent(processed_data)
@@ -373,7 +356,7 @@ class HVACDataGenerator:
         diff_actions_label_by_agent = np.transpose(data["diff_actions_label"], (2, 0, 1)).astype(np.float32)
         
         prompts = data["prompts"]
-        obs_graph = data["obs_graph"].T    # (n_coolers，n_sensors)  
+        obs_graph = data["obs_graph"]    # (n_coolers，n_sensors)  
         agent_graph = data["agent_graph"]  # (n_coolers, n_coolers)
         rewards = data["rewards"]  # (timesteps, 1)
         resets = data["resets"]  # (timesteps, 1)
