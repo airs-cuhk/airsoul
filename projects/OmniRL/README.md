@@ -1,9 +1,12 @@
-OmniRL (Omnipotent-Reinforcement-Leanring) is an in-context reinforcement learning framework meta-trained on the large-scale dataset of Markov Decision Processes (MDPs).
+OmniRL (Omnipotent-Reinforcement-Leanring) is an In-Context Reinforcement Learning (ICRL) framework meta-trained on the large-scale dataset of Markov Decision Processes (MDPs).
 
 ## Features of OmniRL
-- **Generalized In-context Learning**: OmniRL can learn a novel MDP task by in-context learning using imitation learning, reinforce learning, and offline-RL.
-- **Long-horizon In-Context Learning**: Can reasoning over trajectories as long as 1 million steps.
-- **Highly Generalizable**: OmniRL can generalize to unseen MDPs and environments, including Cliff, Lake, MountainCar, Pendulum etc.
+- **Efficient training**: OmniRL is trained by Decoupled Policy Distillation and chunk-wise back-propagation, capable of exploration & exploitation
+- **Long-Context Reasoning with Linear Attention**: Can reasoning over trajectories as long as 1 million steps
+- **Highly Generalizable**: OmniRL can generalize to unseen MDPs and environments
+
+## Training Dataset
+- OmniRL is trained on procedurally generated MDP tasks ([AnyMDP](https://github.com/FutureAGI/L3C/tree/main/l3c/anymdp))
 
 ## Performances
 
@@ -12,7 +15,7 @@ A sketch of the structure of OmniRL
   <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/OmniRL_Structure.gif" alt="OmniRL Sketch" style="width: 320px;">
 </div>
 
-OmniRL is completely meta-trained on synthetic MDPs ([AnyMDP](https://github.com/FutureAGI/L3C/tree/main/l3c/anymdp)) and can generalize to various environments.
+OmniRL can generalize to various environments.
 <div style="height: 320; overflow: hidden;">
   <img src="https://github.com/FutureAGI/DataPack/blob/main/demo/anymdp/AnyMDP_Visualization.png" alt="OmniRL Train" style="width: 320px;">
 </div>
