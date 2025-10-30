@@ -6,7 +6,7 @@ OmniRL (Omnipotent-Reinforcement-Leanring) is an In-Context Reinforcement Learni
 - **Highly Generalizable**: OmniRL can generalize to unseen MDPs and environments
 
 ## Training Dataset
-- OmniRL is trained on procedurally generated MDP tasks ([AnyMDP](https://github.com/FutureAGI/L3C/tree/main/l3c/anymdp))
+- OmniRL is trained on procedurally generated MDP tasks ([AnyMDP](https://github.com/FutureAGI/Xenoverse/tree/main/xenoverse/anymdp))
 
 ## Performances
 
