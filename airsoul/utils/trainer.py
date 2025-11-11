@@ -248,7 +248,8 @@ def EpochManager(cls):
 
                 yield need_break, done
 
-            self.training_metainfo["epochs"] += 1
+            if self.is_training:
+                self.training_metainfo["epochs"] += 1
             
             # Save At Training Epoch End
             if(self.main and self.is_training):
