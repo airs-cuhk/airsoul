@@ -79,6 +79,7 @@ class OmniRL(POTARDecisionModel):
         if(self.loss_weight.shape[0] < pe):
             log_fatal(f"Loss weight (shape {self.loss_weight.shape[0]}) should be longer" +
                     f" than sequence length {pe}")
+
         loss_weight_s = None
         loss_weight_a = None
         if(use_loss_weight):

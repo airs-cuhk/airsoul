@@ -124,6 +124,18 @@ def memory_cpy(cache):
     else:
         return cache
 
+def model_path(save_model_path, epoch_id, *optimizers):
+    directory_path = '%s/ckpt_%02d/' % (save_model_path, epoch_id)
+    if not os.path.exists(directory_path):
+        os.makedirs(directory_path)
+    if(len(optimizers) < 1):
+        return f'{directory_path}/model.pth'
+    else:
+        ret_str = [f'{directory_path}/model.pth']
+        for opt in optimizers:
+            ret_str.append(f'{directory_path}/{opt}.pth')
+    return tuple(ret_str)
+
 def reset_optimizer_state(optimizer):
     state = optimizer.state
     for k in list(state.keys()):

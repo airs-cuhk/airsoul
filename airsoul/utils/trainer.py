@@ -19,11 +19,7 @@ from .scheduler import noam_scheduler
 
 def is_multi_node():
     # 检查NODE_RANK（torchrun多机时设置）
-    node_rank = os.environ.get('NODE_RANK')
-    if node_rank is not None:
-        return True  # 有NODE_RANK说明是多机 
-    return False
-
+    return int(os.environ.get("NNODES", "1")) > 1
 
 def EpochManager(cls):
     @wraps(cls, updated=())
@@ -252,7 +248,8 @@ def EpochManager(cls):
 
                 yield need_break, done
 
-            self.training_metainfo["epochs"] += 1
+            if self.is_training:
+                self.training_metainfo["epochs"] += 1
             
             # Save At Training Epoch End
             if(self.main and self.is_training):
@@ -271,17 +268,12 @@ def EpochManager(cls):
 def dist_process(rank, use_gpu, world_size, config, main_rank,
                 model_type, train_objects, evaluate_objects, extra_info):
     if use_gpu:
-        if is_multi_node():
-            local_rank = int(os.environ["LOCAL_RANK"])
-            torch.cuda.set_device(local_rank)
-            device = torch.device(f'cuda:{local_rank}')
-            device_type = 'cuda'
-            dist.init_process_group("nccl", rank=rank, world_size=world_size)
-        else:
-            torch.cuda.set_device(rank)  # Set the current GPU to be used
-            device = torch.device(f'cuda:{rank}')
-            device_type = 'cuda'
-            dist.init_process_group("nccl", rank=rank, world_size=world_size)
+        local_rank = int(os.environ.get("LOCAL_RANK", rank))
+        torch.cuda.set_device(local_rank)
+        device = torch.device(f'cuda:{local_rank}')
+        device_type = 'cuda'
+        print(f"[Rank {rank}] Using GPU: {local_rank}, Total GPUs: {torch.cuda.device_count()}")
+        dist.init_process_group("nccl", rank=rank, world_size=world_size)
     else:
         device = torch.device('cpu')
         device_type = 'cpu'
@@ -456,7 +448,7 @@ class Runner(object):
         
         print("Final configuration:\n", self.config)
 
-        if not is_multi_node():
+        if"RANK" not in os.environ:
             if(self.config.has_attr('monitor_dir')):
                 create_folder(self.config.monitor_dir)
                 self.config.to_yaml(f"{self.config.monitor_dir}/config_monitor.yaml")
@@ -477,7 +469,7 @@ class Runner(object):
 
     def start(self, model_type, train_objects, evaluate_objects, extra_info=None):
 
-        if is_multi_node():
+        if "RANK" in os.environ:
             rank = int(os.environ["RANK"])
             local_rank = int(os.environ["LOCAL_RANK"])
             world_size = int(os.environ["WORLD_SIZE"])
@@ -486,7 +478,7 @@ class Runner(object):
                 use_gpu=self.use_gpu,
                 world_size=world_size,
                 config=self.config,
-                main_rank=0,  # 可保留或去掉此逻辑
+                main_rank=0,
                 model_type=model_type,
                 train_objects=train_objects,
                 evaluate_objects=evaluate_objects,

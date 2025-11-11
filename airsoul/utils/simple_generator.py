@@ -7,11 +7,11 @@ from .tools import custom_load_model
 from .trainer import Runner
 
 class ModelLoader:
-    def __init__(self, config=None, use_gpu=False, world_size=1, **kwargs):
+    def __init__(self, config=None, device="cuda", use_gpu=False, world_size=1, **kwargs):
         self.config = config
         self.use_gpu = use_gpu
         self.world_size = world_size
-        self.device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
+        self.device = torch.device(device if use_gpu and torch.cuda.is_available() else "cpu")
         self.rank = 0
 
         # Initialize distributed process group for DDP
@@ -34,7 +34,11 @@ class ModelLoader:
 
         try:
             model = model_type(self.config.model_config).to(self.device)
-            model = DDP(model, device_ids=[0] if self.use_gpu else None, find_unused_parameters=True)
+            device_ids = None
+            if self.use_gpu and self.device.type == "cuda":
+                gpu_index = int(self.device.index)  # Get the GPU index from device (e.g., 1 for cuda:1)
+                device_ids = [gpu_index]
+            model = DDP(model, device_ids=device_ids, find_unused_parameters=True)
             log_debug("Single-process DDP initialized")
 
             checkpoint_path = os.path.join(self.config.load_model_path)

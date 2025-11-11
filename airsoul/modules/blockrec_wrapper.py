@@ -65,6 +65,7 @@ class BlockRecurrentWrapper(nn.Module):
         elif(self.memory_type == "mem"):
             # Just update the memory and the cache
             self.memory = memory_cpy(cache)
+            return self.memory
         else:
             log_fatal(f"No such memory type: {self.memory_type}")
         return None
