@@ -168,8 +168,7 @@ def EpochManager(cls):
         def run(self, device, device_type):
             if(not self._valid_epoch()):
                 return
-            
-            acc_iter = 0
+
             acc_iter_log = 0
 
             if(not hasattr(self.computer, 'compute')):
@@ -186,7 +185,6 @@ def EpochManager(cls):
                 done = False
 
             for batch_id, batch_data in enumerate(self.dataloader):
-                acc_iter += 1
                 acc_iter_log += 1
 
                 # Important: Must reset the model before segment iteration
@@ -231,7 +229,6 @@ def EpochManager(cls):
                 if(self.is_training and self.config.has_attr("max_save_iterations") 
                                 and (self.get_global_batch_id + 1) % self.config.max_save_iterations == 0
                                 and self.config.max_save_iterations > 0):
-                    acc_iter = 0
                     log_debug("\nSAVE MODEL FOR FAIL-SAFETY...\n", on=self.main)
                     if(self.main):
                         check_model_validity(self.model.module)
