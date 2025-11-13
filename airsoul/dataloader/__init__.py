@@ -4,3 +4,4 @@ from .anymdp_dataset import AnyMDPDataSet, AnyMDPv2DataSet, AnyMDPDataSetContinu
 from .multiagent_dataset import MultiAgentDataSetVetorized, MultiAgentLoadDateSet
 from .prefetch_dataloader import PrefetchDataLoader, segment_iterator
 from .smallbatch_dataset import SmallBatchDataSetBase
+from .quad_dataset import QuadDataSet

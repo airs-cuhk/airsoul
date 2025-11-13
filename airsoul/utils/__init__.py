@@ -8,7 +8,7 @@ from .tools import Configure, Logger, log_warn, log_debug, log_progress, log_fat
 from .tools import create_folder, import_with_caution
 from .trainer import EpochManager, Runner
 from .generator import GeneratorRunner, GeneratorBase
-from .simple_generator import ModelLoader
+from .generator_api import ModelLoader
 from .vocab import tag_vocabulary, tag_mapping_gamma, tag_mapping_id
 from .visualization import AgentVisualizer
 from .rl_base import TabularQ
