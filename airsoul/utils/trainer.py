@@ -220,9 +220,8 @@ def EpochManager(cls):
                 # Safety Check and Save
                 need_break = False
                 if(self.is_training and self.config.has_attr("max_save_iterations") 
-                                and (self.get_global_batch_id + 1) > self.config.max_save_iterations 
+                                and (self.get_global_batch_id + 1) % self.config.max_save_iterations == 0
                                 and self.config.max_save_iterations > 0):
-                    acc_iter = 0
                     log_debug("\nSAVE MODEL FOR FAIL-SAFETY...\n", on=self.main)
                     if(self.main):
                         custom_save_model(self.model, self.config.save_model_path,
@@ -308,6 +307,7 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
                                   verbose=main, 
                                   strict_check=False)
     else:
+        metainfo = []
         log_warn("No model is loaded as `load_model_path` is not found in config or is None", on=main)
 
     if(not isinstance(train_objects, list) and not isinstance(train_objects, tuple)):

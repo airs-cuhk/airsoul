@@ -1,3 +1,4 @@
+import copy
 import torch
 from torch import nn
 from airsoul.utils import log_warn
@@ -5,7 +6,7 @@ from native_sparse_attention_pytorch import SparseAttention
         
 class NSATransformerEncoderLayer(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
-        super(ARTransformerEncoderLayer, self).__init__()
+        super(NSATransformerEncoderLayer, self).__init__()
         self.self_attn = SparseAttention(
                 dim = d_model,
                 dim_head = d_model // nhead,
@@ -38,7 +39,7 @@ class NSATransformerEncoderLayer(nn.Module):
         # Self Attention
 
         output = self.norm1(src)        
-        output = self.self_attn(output, kv, kv, rope, attn_mask=attn_mask, q0_pos=q0_pos)
+        output = self.self_attn(output)
 
         # Residual Connection
         output = src + output
@@ -54,10 +55,8 @@ class NSATransformerEncoder(nn.Module):
             num_layers : int, 
             d_model : int, 
             nhead : int, 
-            max_position_encoding : int,
             dim_feedforward : int=2048, 
-            dropout : float=0.10,
-            context_window: int=-1):
+            dropout : float=0.10):
         super(NSATransformerEncoder, self).__init__()
         self.num_layers = num_layers
         self.d_head = d_model // nhead

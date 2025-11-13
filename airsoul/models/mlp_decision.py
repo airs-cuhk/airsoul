@@ -14,18 +14,9 @@ from airsoul.utils import log_debug, log_warn, log_fatal
 from airsoul.modules import ImageEncoder, ImageDecoder
 from .decision_model import POTARDecisionModel
 
-class OmniRL(POTARDecisionModel):
+class MLPDecision(nn.Module):
     def __init__(self, config, verbose=False): 
-        super().__init__(config)
-
-        # Loss weighting
-        loss_weight = torch.cat( (torch.linspace(1.0e-3, 1.0, config.context_warmup),
-                                  torch.full((config.max_position_loss_weighting - config.context_warmup,), 1.0)
-                                  ), 
-                                dim=0)
-        loss_weight = loss_weight / torch.sum(loss_weight)
-
-        self.register_buffer('loss_weight', loss_weight)
+        super().__init__()
 
         self.nactions = config.action_dim
         self.state_dtype = config.state_encode.input_type
@@ -46,9 +37,138 @@ class OmniRL(POTARDecisionModel):
         else:
             raise ValueError("Invalid reward encoding type", config.action_encoding)
 
+        self.hidden_size = config.causal_block.input_size
+        self.causal_model = ResidualMLPDecoder(config.causal_block)
+
+        self.rsa_choice =  ["poar", "oar", "oa", "poa"]
+        if(config.rsa_type.lower() not in self.rsa_choice):
+            log_fatal(f"rsa_type must be one of the following: {self.rsa_choice}, get {self.rsa_type}")
+
+        if(self.rsa_type.find('r') > -1):
+            self.r_decoder = ResidualMLPDecoder(config.reward_decode)
+        else:
+            self.r_decoder = None
+
+        if(config.action_diffusion.enable):
+            self.a_diffusion = DiffusionLayers(config.action_diffusion)
+            self.a_mapping = FixedEncoderDecoder(low_dim=config.action_encode.input_size,
+                                                 high_dim=config.action_encode.hidden_size)
+            self.a_encoder = self.a_mapping.encoder
+            self.a_decoder = self.a_mapping.decoder
+        else:
+            self.a_encoder = MLPEncoder(config.action_encode, reserved_ID=True)
+            self.a_decoder = ResidualMLPDecoder(config.action_decode)
+            
+        if(config.state_diffusion.enable):
+            self.s_diffusion = DiffusionLayers(config.state_diffusion)
+            self.s_mapping = FixedEncoderDecoder(low_dim=config.state_encode.input_size,
+                                                 high_dim=config.state_encode.hidden_size)
+            self.s_encoder = self.s_mapping.encoder
+            self.s_decoder = self.s_mapping.decoder
+        else:
+            self.s_encoder = MLPEncoder(config.state_encode, reserved_ID=True)
+            self.s_decoder = ResidualMLPDecoder(config.state_decode)
+
+        if(self.config.state_encode.input_type == "Discrete"):
+            self.s_discrete = True
+            self.s_dim = self.config.state_encode.input_size
+        else:
+            self.s_discrete = False
+
+        if(self.config.action_encode.input_type == "Discrete"):
+            self.a_discrete = True
+            self.a_dim = self.config.action_encode.input_size
+        else:
+            self.a_discrete = False
+
+        if("p" in self.rsa_type):
+            self.p_encoder = MLPEncoder(config.prompt_encode)
+            self.p_included = True
+            if(self.config.prompt_encode.input_type == "Discrete"):
+                self.p_discrete = True
+            else:
+                self.p_discrete = False
+        else:
+            self.p_included = False
+
+        if("r" in self.rsa_type):
+            self.r_encoder = MLPEncoder(config.reward_encode, reserved_ID=True)
+            self.r_included = True
+            if(self.config.reward_encode.input_type == "Discrete"):
+                self.r_discrete = True
+                self.r_dim = self.config.reward_encode.input_size
+            else:
+                self.r_discrete = False
+        else:
+            self.r_included = False
+
         if(verbose):
             log_debug("RSA Decision Model initialized, total params: {}".format(count_parameters(self)))
             log_debug("Causal Block Parameters: {}".format(count_parameters(self.causal_model)))
+
+    def forward(self, o_arr, p_arr, t_arr, a_arr, r_arr, 
+                cache=None, need_cache=True, state_dropout=0.0, T=1.0, update_memory=True):
+        """
+        Input Size:
+            observations:[B, NT, H], float
+            actions:[B, NT, H], float
+            prompts: [B, NT, H], float or None
+            rewards:[B, NT, X], float or None
+            cache: [B, NC, H]
+        """
+        B = o_arr.shape[0]
+        NT = o_arr.shape[1]
+
+        assert a_arr.shape[:2] == o_arr.shape[:2]
+
+        if(self.p_included):
+            assert p_arr is not None
+            assert p_arr.shape[:2] == o_arr.shape[:2]
+        if(self.r_included):
+            assert r_arr is not None
+            assert r_arr.shape[:2] == o_arr.shape[:2]
+            if(self.r_discrete):
+                r_arr = torch.where(r_arr<0, torch.full_like(r_arr, self.r_dim), r_arr)
+            else:
+                if(r_arr.dim() < 3):
+                    r_arr = r_arr.view(B, NT, 1)
+
+        if(self.s_discrete):
+            observation_in = torch.where(observation_in<0, torch.full_like(observation_in, self.s_dim), observation_in)
+        if(self.a_discrete):
+            a_arr = torch.where(a_arr<0, torch.full_like(a_arr, self.a_dim), a_arr)
+
+        var_dict = {}
+        var_dict["o_in"] = self.s_encoder(observation_in).view(B, NT, -1)
+        var_dict["a_in"] = self.a_encoder(a_arr).view(B, NT, -1)
+
+        if(self.p_included):
+            p_in = self.p_encoder(p_arr)
+            var_dict["p_in"] = p_in.view(B, NT, -1)
+        if(self.r_included):
+            r_in = self.r_encoder(r_arr)
+            var_dict["r_in"] = r_in.view(B, NT, -1)
+
+        inputs = []
+        for char in self.rsa_type:
+            var_name = f"{char}_in"
+            inputs.append(var_dict[var_name])
+
+        # [B, NT, 2-5, H]
+        outputs = torch.cat(inputs, dim=2)
+
+        # Temporal Encoders
+        outputs = self.causal_model(outputs)
+
+        # Extract world models outputs
+        s_out = self.s_decoder(outputs)
+        a_out = self.a_decoder(outputs)
+        if(self.r_decoder is not None):
+            r_out = self.r_decoder(outputs)
+        else:
+            r_out = None
+
+        return s_out, a_out, r_out
 
     def sequential_loss(self, observations, 
                             prompts,
@@ -68,11 +188,11 @@ class OmniRL(POTARDecisionModel):
         pe = ps + seq_len
         o_in = sa_dropout(observations[:, :-1].clone())
         # Predict the latent representation of action and next frame (World Model)
-        wm_out, pm_out, _ = self.forward(
+        s_pred, a_pred, r_pred = self.forward(
                 o_in, prompts, tags, behavior_actions, rewards,
                 cache=None, need_cache=False,
                 update_memory=update_memory)
-        s_pred, a_pred, r_pred = self.post_decoder(wm_out, pm_out)
+
         # Calculate the loss information
         loss = dict()
         # Mask out the invalid actions
@@ -178,227 +298,3 @@ class OmniRL(POTARDecisionModel):
         
         loss["causal-l2"] = parameters_regularization(self)
         return loss
-    
-    def generate(self, observation,
-                    prompt,
-                    tag,
-                    temp,
-                    need_numpy=True,
-                    single_batch=True,
-                    future_prediction=False):
-        """
-        Generating Step By Step Action and Next Frame Prediction
-        Args:
-            observation 
-            prompts: None if not included
-            tags: None if not included
-            temp: temperature for sampling
-            single_batch: if true, add additional batch to input tensor
-        Returns:
-            o_pred: predicted states, only valid if future_prediction is True
-            a_pred: predicted actions 
-            r_pred: predicted rewards, only valid if future_prediction is True
-        """
-        device = next(self.parameters()).device
-
-        # Prepare the input prompts
-        if(not self.p_included):
-            pro_in = None
-        elif(not isinstance(prompt, torch.Tensor)):
-            pro_in = torch.tensor([prompt], dtype=torch.int64).to(device)
-        else:
-            pro_in = prompt.to(device)
-        
-        # Prepare the input tags
-        if(not self.t_included):
-            tag_in = None
-        elif(not isinstance(tag, torch.Tensor)):
-            tag_in = torch.tensor([tag], dtype=torch.int64).to(device)
-        else:
-            tag_in = tag.to(device)
-
-        # Prepare the input observations
-        if(not isinstance(observation, torch.Tensor)):
-            if not self.config.state_diffusion.enable:
-                obs_in = torch.tensor([observation], dtype=torch.int64).to(device)
-            else:
-                obs_in = torch.tensor([observation], dtype=torch.float32).to(device)
-        else:
-            obs_in = observation.to(device)
-
-        if(single_batch):
-            if(pro_in is not None):
-                pro_in = pro_in.unsqueeze(0)
-            if(tag_in is not None):
-                tag_in = tag_in.unsqueeze(0)
-            obs_in = obs_in.unsqueeze(0)
-
-        B, T = obs_in.shape[:2]
-        if(self.r_included):
-            if(self.reward_dtype == "Discrete"):
-                default_r = self.default_r.to(device=device).expand(B, T)
-            elif(self.reward_dtype == "Continuous"):
-                default_r = self.default_r.to(device=device).expand(B, T, -1)
-        else:
-            default_r = None
-        
-        if(self.action_dtype == "Discrete"):
-            default_a = self.default_a.to(device).expand(B, T)
-        elif(self.action_dtype == "Continuous"):
-            default_a = self.default_a.to(device).expand(B, T, -1)
-
-        wm_out, pm_out, _ = self.forward(
-            obs_in,
-            pro_in,
-            tag_in,
-            default_a,
-            default_r,
-            T=temp,
-            update_memory=False,
-            need_cache=False)
-        
-        o_pred, a_pred, r_pred = self.post_decoder(wm_out, pm_out, T=temp)
-        
-        if not self.config.action_diffusion.enable:
-            if(self.a_discrete):
-                act_in = a_pred / a_pred.sum(dim=-1, keepdim=True)
-                act_in = torch.multinomial(act_in.squeeze(1), num_samples=1)
-                act_out = act_in.squeeze()
-            else:
-                act_in = a_pred
-                act_out = act_in.squeeze()
-        else:
-            a_latent = self.a_diffusion.inference(cond=pm_out)[-1]
-            act_in = self.a_decoder(a_latent)
-            act_out = act_in.squeeze()
-
-        act_out = act_out.detach().cpu().squeeze()
-        if(need_numpy):
-            act_out = act_out.numpy()
-            if(act_out.size < 2):
-                act_out = act_out.item()
-
-        if(future_prediction):
-            wm_out, pm_out, _ = self.forward(
-                obs_in,
-                pro_in,
-                tag_in,
-                act_in,
-                default_r,
-                T=temp,
-                update_memory=False,
-                need_cache=False)
-            
-            o_pred, a_pred, r_pred = self.post_decoder(wm_out, pm_out, T=temp)
-            
-            if not self.config.state_diffusion.enable:
-                state = o_pred.detach().cpu().squeeze()
-            else:
-                o_latent = self.s_diffusion.inference(cond=wm_out)[-1]
-                o_pred = self.s_decoder(o_latent)
-                state = o_pred.detach().cpu().squeeze()
-                
-            if r_pred is not None:
-                reward = r_pred.detach().cpu().squeeze()
-                if(need_numpy):
-                    state = state.numpy()
-                    if(state.size < 2):
-                        state = state.item()
-                    reward = reward.numpy()
-                    if(reward.size < 2):
-                        reward = reward.item()
-            else:
-                reward = 0.0
-
-        else:
-            state = None
-            reward = None
-
-        return state, act_out, reward
-
-    def in_context_learn(self, observation,
-                    prompts,
-                    tags,
-                    action,
-                    reward,
-                    cache=None,
-                    need_cache=False,
-                    single_batch=True,
-                    single_step=True):
-        """
-        In Context Reinforcement Learning Through an Sequence of Steps
-        """
-        device = next(self.parameters()).device
-        pro_in = None
-        obs_in = None
-
-        def proc(x):
-            if(x is None):
-                return x
-            if(single_batch and single_step):
-                return x.unsqueeze(0).unsqueeze(0).to(device)
-            elif(single_batch):
-                return x.unsqueeze(0).to(device)
-            elif(single_step):
-                return x.unsqueeze(1).to(device)
-            return x.to(device)
-
-        obs_in = observation
-        pro_in = prompts
-        tag_in = tags
-        act_in = action
-        rew_in = reward
-
-        if(not isinstance(obs_in, torch.Tensor)):
-            obs_in = torch.tensor(obs_in)
-        obs_in = proc(obs_in)
-        if(pro_in is not None and not isinstance(pro_in, torch.Tensor)):
-            pro_in = torch.tensor(pro_in)
-        pro_in = proc(pro_in)
-        if(tag_in is not None and not isinstance(tag_in, torch.Tensor)):
-            tag_in = torch.tensor(tag_in)
-        tag_in = proc(tag_in)
-        if(not isinstance(action, torch.Tensor)):
-            act_in = torch.tensor(act_in)
-        act_in = proc(act_in)
-        if(not isinstance(reward, torch.Tensor) and reward is not None):
-            rew_in = torch.tensor(rew_in)
-        rew_in = proc(rew_in)
-
-        if self.reward_dtype == "Continuous":
-            rew_in = rew_in.to(torch.float32)
-        else:
-            rew_in = rew_in.to(torch.int32)
-
-        # observation, prompt, tag, action, reward; update memory = true
-        _, _, new_cache = self.forward(
-            obs_in,
-            pro_in,
-            tag_in,
-            act_in,
-            rew_in,
-            need_cache=need_cache,
-            update_memory=True)
-        
-        return new_cache
-
-if __name__=="__main__":
-    from utils import Configure
-    config=Configure()
-    config.from_yaml(sys.argv[1])
-
-    model = OmniRL(config.model_config)
-
-    observation = torch.randn(8, 33, 3, 128, 128)
-    action = torch.randint(4, (8, 32)) 
-    reward = torch.randn(8, 32)
-    local_map = torch.randn(8, 32, 3, 7, 7)
-
-    vae_loss = model.vae_loss(observation)
-    losses = model.sequential_loss(None, observation, reward, action, action)
-    rec_img, img_out, act_out, cache = model.inference_step_by_step(
-            observation[:, :5], action[:, :4], 1.0, 0, observation.device)
-    print("vae:", vae_loss, "sequential:", losses)
-    print(img_out[0].shape, act_out.shape)
-    print(len(cache))
-    print(cache[0].shape)

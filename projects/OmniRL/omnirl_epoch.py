@@ -793,11 +793,8 @@ class OmniRLGenerator(GeneratorBase):
                 env_action = action % self.config.action_clip 
                 # Interact with environment         
                 new_state, new_reward, terminated, truncated, *_ = self.env.step(env_action)
-                if self.config.env.lower().find("anymdp") >= 0:
-                        done = terminated
-                else:
-                    if terminated or truncated:
-                        done = True
+                if terminated or truncated:
+                    done = True
                 # Reward shaping
                 shaped_reward = self.reward_shaping(done, terminated, new_reward)
 

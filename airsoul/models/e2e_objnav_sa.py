@@ -132,18 +132,14 @@ class E2EObjNavSA(nn.Module):
         loss = dict()
 
         loss_weight_s = None
-        loss_weight_a = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(
-                    self.loss_weight.dtype)
+        loss_weight_a = None
         if(use_loss_weight):
             loss_weight_s = self.loss_weight[ps:pe]
             if self.action_dtype == "Discrete":
+                loss_weight_a = (label_actions.ge(0) * label_actions.lt(self.nactions)).to(self.loss_weight.dtype)
                 loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0)
             elif self.action_dtype == "Continuous":
-                loss_weight_a = loss_weight_a * self.loss_weight[ps:pe].unsqueeze(0).unsqueeze(-1)
-                loss_weight_a = torch.mean(loss_weight_a, dim=-1, keepdim=True).squeeze(-1)
-        else:
-            if self.action_dtype == "Continuous":
-                loss_weight_a = torch.sum(loss_weight_a, dim=-1, keepdim=True).squeeze(-1)
+                loss_weight_a = self.loss_weight[ps:pe]
 
         if not self.config.decision_block.state_diffusion.enable:
             # World Model Loss - Latent Space

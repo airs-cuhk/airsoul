@@ -73,6 +73,18 @@ model_config:
       dropout: 0.0
       is_frozen: False
 
+  causal_block_bak_0: # MLP Decision Block
+      output_type: Continous
+      input_size: 128
+      hidden_size:
+          - 512
+          - 256
+          - 128
+      layer_norm: True
+      residual_connect: True
+      dropout: 0.0
+      is_frozen: False
+
   causal_block_bak_1: # change to causal_block if use this block
       model_type: TRANSFORMER
       num_layers: 6

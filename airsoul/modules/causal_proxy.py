@@ -11,6 +11,7 @@ from .gsa import GLABlock, GSABlock
 from .rwkv6 import RWKV6Layer
 from .rwkv7 import RWKV7Layer
 from .deltanet import GatedDeltaNet
+from .mamba2 import Mamba2Layer
 from .sparse_attention import NSATransformerEncoder
 
 class CausalBlock(nn.Module):
@@ -81,6 +82,20 @@ class CausalBlock(nn.Module):
                 max_position_encoding=config.position_encoding_size,
                 expand=config.expand,    # Block expansion factor
             )
+        elif(self.model_type == "mamba2"):
+            use_segment_input = config.use_segment_input
+            if not config.use_blockrecurrence:
+                use_segment_input = False
+            main_encoder = MultiBlocks(
+                Mamba2Layer,
+                config.num_layers,
+                need_block_wrapper=False,
+                io_size=config.hidden_size,
+                expand=config.inner_hidden_size/config.hidden_size,
+                num_heads=config.nhead,
+                use_segment_input=use_segment_input,
+                num_hidden_layers=config.num_layers,
+            )
         elif(self.model_type == "rwkv6"):
             main_encoder = MultiBlocks(
                 RWKV6Layer,
@@ -111,7 +126,7 @@ class CausalBlock(nn.Module):
                 io_size=config.hidden_size,
                 intermediate_size=config.inner_hidden_size,
                 num_heads=config.nhead,
-                expend_v = config.expend_v
+                expand_v = config.expand_v
             )           
         else:
             raise Exception("No such causal model: %s" % config.model_type)
