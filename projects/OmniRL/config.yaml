@@ -261,28 +261,12 @@ train_config:
     use_amp: False
     use_scaler: False
 
-datasets:
-  - name: test_st
-    data_path: /mnt/data/cassel/omnirl/validation-sets-test/16-task-seen-eval-set/
-    batch_size: 4
-    seq_len: 5000
-    seg_len: 2500
-    output: /mnt/data/cassel/omnirl/checkpoint_log/offline_eval/test_st/validate.txt
-    log_dir: /mnt/data/cassel/omnirl/checkpoint_log/debug/test_st
-  - name: test_ut
-    data_path: /mnt/data/cassel/omnirl/validation-sets-test/16-task-eval-set
-    batch_size: 4
-    seq_len: 10000
-    seg_len: 2500
-    output: /mnt/data/cassel/omnirl/checkpoint_log/offline_eval/test_ut/validate.txt
-    log_dir: /mnt/data/cassel/omnirl/checkpoint_log/debug/test_ut
-  - name: test_um
-    data_path: /mnt/data/cassel/omnirl/us-morph-eval-set
-    batch_size: 4
-    seq_len: 10000
-    seg_len: 2500
-    output: /mnt/data/cassel/omnirl/checkpoint_log/offline_eval/unseen-morph-eval/validate.txt
-    log_dir: /mnt/data/cassel/omnirl/checkpoint_log/debug/unseen-morph-eval
+test_config:
+    batch_size: 16
+    data_path: [Path]
+    output: "./offline_eval/"
+    seq_len: 16000
+    seg_len: 4000
 
 generator_config:
     agent_num: 1 # If env=switch, set agent_num=2, use MultiAgentGenerator class in generate.py

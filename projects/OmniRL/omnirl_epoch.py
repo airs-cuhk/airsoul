@@ -40,7 +40,7 @@ class OmniRLEpoch:
     def __init__(self, **kwargs):
         for key in kwargs:
             setattr(self, key, kwargs[key])
-        self.DataType=AnyMDPv2DataSet #AnyMDPDataSet
+        self.DataType=AnyMDPDataSet #AnyMDPDataSet
         if(self.is_training):
             self.logger_keys = ["learning_rate", 
                         "loss_worldmodel_state", 
@@ -167,7 +167,7 @@ class OmniRLEpoch:
                         os.makedirs(self.config.output)
                     for key_name in stat_res:
                         res_text = string_mean_var(self.downsample_length, stat_res[key_name])
-                        file_path = f'{self.config.output}'
+                        file_path = f'{self.config.output}/result_{key_name}.txt'
                         if os.path.exists(file_path):
                             os.remove(file_path)
                         with open(file_path, 'w') as f_model:
