@@ -13,9 +13,11 @@ class RWKV7Layer(nn.Module):
                 num_heads: int = 4,
                 layer_idx: int = 0):
         super().__init__()
+        head_dim = io_size // num_heads
         self.config = RWKV7Config(
                   hidden_size=io_size,
                   intermediate_size=intermediate_size,
+                  head_dim=head_dim,
                   num_heads=num_heads)
         self.layer_idx = layer_idx
         if layer_idx == 0:
