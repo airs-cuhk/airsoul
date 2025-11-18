@@ -222,7 +222,7 @@ class OmniRL(POTARDecisionModel):
         if(not self.p_included):
             pro_in = None
         elif not isinstance(prompt, torch.Tensor):
-            if self.promot_dtype == "Discrete" :
+            if self.prompt_dtype == "Discrete" :
                 pro_in = torch.tensor([prompt], dtype=torch.int64).to(device)
             elif self.prompt_dtype == "Continuous" :
                 # Handle non-tensor input (e.g., list or scalar) for batch=1
@@ -253,6 +253,13 @@ class OmniRL(POTARDecisionModel):
             if(tag_in is not None):
                 tag_in = tag_in.unsqueeze(0)
             obs_in = obs_in.unsqueeze(0)
+
+        # [T, B, D] -> [B, T, D]
+        if(pro_in is not None):
+            pro_in = pro_in.transpose(0, 1)
+        if(tag_in is not None):
+            tag_in = tag_in.transpose(0, 1)
+        obs_in = obs_in.transpose(0, 1)
 
         B, T = obs_in.shape[:2]
         if(self.r_included):

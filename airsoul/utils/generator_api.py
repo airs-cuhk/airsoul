@@ -47,13 +47,18 @@ class ModelLoader:
                 raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
             black_list = getattr(self.config, 'load_model_parameter_blacklist', [])
-            model = custom_load_model(
+            result = custom_load_model(
                 model,
                 checkpoint_path,
                 black_list=black_list,
                 verbose=True,
                 strict_check=False
             )
+            if isinstance(result, tuple):
+                model = result[0]  # 取第一个元素作为模型
+                log_debug(f"custom_load_model returned a tuple, using [0] as model. Full return: {len(result)} items")
+            else:
+                model = result
             log_debug(f"Model loaded from {checkpoint_path}")
 
             model.eval()
