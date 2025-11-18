@@ -18,7 +18,6 @@ from .tools import create_folder, check_model_validity, model_path, count_parame
 from .scheduler import noam_scheduler
 
 def is_multi_node():
-    # 检查NODE_RANK（torchrun多机时设置）
     return int(os.environ.get("NNODES", "1")) > 1
 
 def EpochManager(cls):
@@ -445,7 +444,7 @@ class Runner(object):
         
         print("Final configuration:\n", self.config)
 
-        if"RANK" not in os.environ:
+        if not is_multi_node():
             if(self.config.has_attr('monitor_dir')):
                 create_folder(self.config.monitor_dir)
                 self.config.to_yaml(f"{self.config.monitor_dir}/config_monitor.yaml")
@@ -466,7 +465,7 @@ class Runner(object):
 
     def start(self, model_type, train_objects, evaluate_objects, extra_info=None):
 
-        if "RANK" in os.environ:
+        if is_multi_node():
             rank = int(os.environ["RANK"])
             local_rank = int(os.environ["LOCAL_RANK"])
             world_size = int(os.environ["WORLD_SIZE"])
