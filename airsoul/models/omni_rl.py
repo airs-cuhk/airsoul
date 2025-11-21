@@ -31,6 +31,7 @@ class OmniRL(POTARDecisionModel):
         self.state_dtype = config.state_encode.input_type
         self.reward_dtype = config.reward_encode.input_type
         self.action_dtype = config.action_encode.input_type
+        self.prompt_dtype = config.prompt_encode.input_type
 
         if(config.reward_encode.input_type == "Discrete"):
             self.default_r = torch.full(config.reward_encode.input_size, (1, 1), dtype=torch.int64)
@@ -124,12 +125,20 @@ class OmniRL(POTARDecisionModel):
                                         reduce_dim=reduce_dim,
                                         need_cnt=True)
 
+        elif self.state_dtype == "Continuous" and not self.config.state_diffusion.enable:
+            loss["wm-s"], loss["count_s"] = weighted_loss(s_pred,
+                loss_type="mse",
+                gt=observations[:, 1:],
+                loss_wht=loss_weight_s,
+                reduce_dim=reduce_dim,
+                need_cnt=True)
+
         if(r_pred is not None):
-            loss["wm-r"] = weighted_loss(r_pred, 
-                                         gt=rewards.view(*rewards.shape,1), 
-                                         loss_type="mse",
-                                         loss_wht=loss_weight_a,
-                                         reduce_dim=reduce_dim)
+            loss["wm-r"] = weighted_loss(r_pred,
+                                        gt=rewards.view(*rewards.shape,1),
+                                        loss_type="mse",
+                                        loss_wht=loss_weight_a,
+                                        reduce_dim=reduce_dim)
         else:
             loss["wm-r"] = 0
 
@@ -167,6 +176,14 @@ class OmniRL(POTARDecisionModel):
                                        loss_wht=loss_weight_a, 
                                        reduce_dim=reduce_dim,
                                        need_cnt=True)
+
+        elif self.action_dtype == "Continuous" and not self.config.action_diffusion.enable:
+            loss["pm"], loss["count_a"] = weighted_loss(a_pred,
+                loss_type="mse",
+                gt=label_actions,
+                loss_wht=loss_weight_a,
+                reduce_dim=reduce_dim,
+                need_cnt=True)
         # Entropy Loss
         if self.action_dtype == "Discrete" :
             loss["ent"] = weighted_loss(a_pred, 
@@ -204,8 +221,12 @@ class OmniRL(POTARDecisionModel):
         # Prepare the input prompts
         if(not self.p_included):
             pro_in = None
-        elif(not isinstance(prompt, torch.Tensor)):
-            pro_in = torch.tensor([prompt], dtype=torch.int64).to(device)
+        elif not isinstance(prompt, torch.Tensor):
+            if self.prompt_dtype == "Discrete" :
+                pro_in = torch.tensor([prompt], dtype=torch.int64).to(device)
+            elif self.prompt_dtype == "Continuous" :
+                # Handle non-tensor input (e.g., list or scalar) for batch=1
+                pro_in = torch.tensor([prompt], dtype=torch.float32).to(device)
         else:
             pro_in = prompt.to(device)
         
@@ -219,9 +240,9 @@ class OmniRL(POTARDecisionModel):
 
         # Prepare the input observations
         if(not isinstance(observation, torch.Tensor)):
-            if not self.config.state_diffusion.enable:
+            if self.state_dtype == "Discrete":
                 obs_in = torch.tensor([observation], dtype=torch.int64).to(device)
-            else:
+            elif self.state_dtype == "Continuous" :
                 obs_in = torch.tensor([observation], dtype=torch.float32).to(device)
         else:
             obs_in = observation.to(device)
@@ -233,6 +254,13 @@ class OmniRL(POTARDecisionModel):
                 tag_in = tag_in.unsqueeze(0)
             obs_in = obs_in.unsqueeze(0)
 
+        # [T, B, D] -> [B, T, D]
+        if(pro_in is not None):
+            pro_in = pro_in.transpose(0, 1)
+        if(tag_in is not None):
+            tag_in = tag_in.transpose(0, 1)
+        obs_in = obs_in.transpose(0, 1)
+
         B, T = obs_in.shape[:2]
         if(self.r_included):
             if(self.reward_dtype == "Discrete"):
@@ -241,7 +269,7 @@ class OmniRL(POTARDecisionModel):
                 default_r = self.default_r.to(device=device).expand(B, T, -1)
         else:
             default_r = None
-        
+
         if(self.action_dtype == "Discrete"):
             default_a = self.default_a.to(device).expand(B, T)
         elif(self.action_dtype == "Continuous"):

@@ -5,7 +5,7 @@ import torch
 import numpy as np
 from torch.utils.data import DataLoader, Dataset
 
-class AnyMDPDataSetBase(Dataset):
+class QuadDataBase(Dataset):
     def __init__(self, directory, time_step, verbose=False):
         if(verbose):
             print("\nInitializing data set from file: %s..." % directory)
@@ -61,27 +61,8 @@ class AnyMDPDataSetBase(Dataset):
         except Exception as e:
             print(f"Unexpected reading error founded when loading {path}: {e}")
             return (None,) * 6
-
-class AnyMDPDataSet(AnyMDPDataSetBase):
-    def __getitem__(self, index):
-        path = self.file_list[index]
-
-        data = self._load_and_process_data(path)
-        
-        if any(arr is None for arr in data):
-            return None
-
-        obs_arr = torch.from_numpy(data[0].astype("int32")).long() 
-        pro_arr = torch.from_numpy(data[1].astype("int32")).long() 
-        tag_arr = torch.from_numpy(data[2].astype("int32")).long() 
-        bact_arr = torch.from_numpy(data[3].astype("int32")).long()
-        rwd_arr = torch.from_numpy(data[4]).float()
-        lact_arr = torch.from_numpy(data[5].astype("int32")).long() 
-
-        # Orders: O-P-T-A-R and Action Label
-        return obs_arr, pro_arr, tag_arr, bact_arr, rwd_arr, lact_arr
     
-class AnyMDPv2DataSet(AnyMDPDataSetBase):
+class QuadDataSet(QuadDataBase):
     def __getitem__(self, index):
         path = self.file_list[index]
 
@@ -91,7 +72,7 @@ class AnyMDPv2DataSet(AnyMDPDataSetBase):
             return None
 
         obs_arr = torch.from_numpy(data[0]).float()
-        pro_arr = torch.from_numpy(data[1].astype("int32")).long()
+        pro_arr = torch.from_numpy(data[1]).float() 
         tag_arr = torch.from_numpy(data[2].astype("int32")).long() 
         bact_arr = torch.from_numpy(data[3]).float()
         rwd_arr = torch.from_numpy(data[4]).float()
@@ -100,47 +81,10 @@ class AnyMDPv2DataSet(AnyMDPDataSetBase):
         # Orders: O-P-T-A-R and Action Label
         return obs_arr, pro_arr, tag_arr, bact_arr, rwd_arr, lact_arr
 
-class AnyMDPDataSetContinuousState(AnyMDPDataSetBase):
-    def __getitem__(self, index):
-        path = self.file_list[index]
-
-        data = self._load_and_process_data(path)
-        
-        if any(arr is None for arr in data):
-            return None
-        
-        obs_arr = torch.from_numpy(data[0]).float() 
-        pro_arr = torch.from_numpy(data[1].astype("int32")).long() 
-        tag_arr = torch.from_numpy(data[2].astype("int32")).long() 
-        bact_arr = torch.from_numpy(data[3].astype("int32")).long()
-        rwd_arr = torch.from_numpy(data[4]).float()
-        lact_arr = torch.from_numpy(data[5].astype("int32")).long() 
-
-        # Orders: O-P-T-A-R and Action Label
-        return obs_arr, pro_arr, tag_arr, bact_arr, rwd_arr, lact_arr
-    
-class AnyMDPDataSetContinuousStateAction(AnyMDPDataSetBase):
-    def __getitem__(self, index):
-        path = self.file_list[index]
-
-        data = self._load_and_process_data(path)
-        
-        if any(arr is None for arr in data):
-            return None
-        obs_arr = torch.from_numpy(data[0]).float() 
-        pro_arr = torch.from_numpy(data[1].astype("int32")).long() 
-        tag_arr = torch.from_numpy(data[2].astype("int32")).long() 
-        bact_arr = torch.from_numpy(data[3]).float()
-        rwd_arr = torch.from_numpy(data[4]).float()
-        lact_arr = torch.from_numpy(data[5]).float() 
-
-        # Orders: O-P-T-A-R and Action Label
-        return obs_arr, pro_arr, tag_arr, bact_arr, rwd_arr, lact_arr
-
 # Test Maze Data Set
 if __name__=="__main__":
     data_path = sys.argv[1]
-    dataset = AnyMDPDataSet(data_path, 1280, verbose=True)
+    dataset = QuadDataSet(data_path, 1280, verbose=True)
     print("The number of data is: %s" % len(dataset))
     obs, bact, lact, rewards = dataset[0]
     if obs is not None:
