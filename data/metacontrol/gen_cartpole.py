@@ -34,22 +34,30 @@ def is_task_in_range(task, gravity_scope=(8.0, 12.0),
 
 def queue_to_list(q):
     temp_list = []
-    while not q.empty():
-        temp_list.append(q.get())
+    while q.qsize() > 0:
+        try:
+            item = q.get(timeout=1)
+            temp_list.append(item)
+            print(len(temp_list), q.qsize())
+        except Exception as e:
+            print(e)
     return temp_list
 
-def sample_task(queue, gravity_scope, masscart_scope, masspole_scope, length_scope, remove_scope=None):
-    task = sample_cartpole(gravity_scope=gravity_scope,
-                            masscart_scope=masscart_scope,
-                            masspole_scope=masspole_scope,
-                            length_scope=length_scope)
-    if(remove_scope is not None):
-        while is_task_in_range(task, **remove_scope):
-            task = sample_cartpole(gravity_scope=gravity_scope,
+def sample_task(task_num, gravity_scope, masscart_scope, masspole_scope, length_scope, remove_scope=None):
+    task_list = []
+    for tid in range(task_num):
+        task = sample_cartpole(gravity_scope=gravity_scope,
                                 masscart_scope=masscart_scope,
                                 masspole_scope=masspole_scope,
                                 length_scope=length_scope)
-    queue.put(task)
+        if(remove_scope is not None):
+            while is_task_in_range(task, **remove_scope):
+                task = sample_cartpole(gravity_scope=gravity_scope,
+                                    masscart_scope=masscart_scope,
+                                    masspole_scope=masspole_scope,
+                                    length_scope=length_scope)
+        task_list.append(task)
+    return task_list
 
 def dump_cartpole_record(
     task,
@@ -83,7 +91,10 @@ def dump_cartpole_record(
         seq_lactions = []
         seq_rewards = []
 
+        env = gym.make('random-cartpole-v0', frameskip=2)
+        env.set_task(task)
         obs, info = env.reset()
+        exp_ratio = random.uniform(0.20, 0.50)
         seq_obs.append(obs)
         iteration = 0
         while iteration < seq_length:
@@ -160,6 +171,7 @@ def dump_multi_records(
             seq_length,
         )
         print("Worker %d finished task %d, data saved to %s" % (rank_id, task_id, file_path))
+    return
 
 if __name__=="__main__":
     # Parse the arguments, should include the output file name
@@ -193,47 +205,30 @@ if __name__=="__main__":
     length_scope=args.length_scope
 
     # Task Generation
-    task_queue = Queue()
+    task_queue = []
     print("Generating Tasks At First...")
-    max_task_number = args.task_number
+    left_task_number = args.task_number
     if(args.origin_in_scope):
         # Make sure the original task is in the training set
-        task_queue.put({
+        task_queue.append({
             "gravity": 9.8,
             "masscart": 1.0,
             "masspole": 0.1,
             "length": 0.5
         })
+        left_task_number -= 1
         print("Original task added to the task queue.")
-        max_task_number -= 1
-    if(max_task_number > 0):
-        task_workers = min(args.workers, max_task_number)
-        worker_splits = int((max_task_number - 1) // task_workers + 1)
-        processes = []
-        n_b_t = 0
-        for worker_id in range(task_workers):
-            n_e_t = min(n_b_t + worker_splits, max_task_number)
-            n_b = int(n_b_t)
-            n_e = int(n_e_t)
-            if(n_e_t - n_b_t < 1):
-                break
-            print("start processes generating tasks %04d to %04d" % (n_b, n_e))
-            process = multiprocessing.Process(target=sample_task,
-                    args=(task_queue,
+
+    task_queue.extend(sample_task(left_task_number,
                         gravity_scope,
                         masscart_scope,
                         masspole_scope,
                         length_scope,
                         remove_scope))
-            processes.append(process)
-            process.start()
-            n_b_t = n_e_t
-        for process in processes:
-            process.join()
-    print("Task Generation Finished.")
 
-    task_queue = queue_to_list(task_queue)
     task_number = len(task_queue)
+    print(f"Task Generation Finished, acquiring {task_number} tasks (expect: {args.task_number})")
+
 
     print("Start Data Generation...")
     # Data Generation
@@ -253,7 +248,7 @@ if __name__=="__main__":
         n_e_t = min(n_b_t + worker_taskids, total_taskids + args.start_index)
         n_b = int(n_b_t)
         n_e = int(n_e_t)
-        if(n_e_t - n_b_t < 1):
+        if(n_e - n_b < 1):
             break
 
         print("start processes generating %04d to %04d" % (n_b, n_e))
