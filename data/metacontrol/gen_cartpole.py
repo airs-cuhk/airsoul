@@ -9,6 +9,7 @@ import multiprocessing
 from multiprocessing import Process, Queue
 import gymnasium as gym
 import torch
+from queue import Empty
 from stable_baselines3 import PPO
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
@@ -59,10 +60,7 @@ def dump_cartpole_record(
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     torch.set_num_threads(1)
     env = gym.make('random-cartpole-v0', frameskip=2)
-
     env.set_task(task)
-
-    exp_ratio = random.uniform(0.30, 0.60)
 
     model = PPO(
         policy="MlpPolicy",
@@ -102,12 +100,21 @@ def dump_cartpole_record(
             seq_rewards.append(reward)
             iteration += 1
             if (terminated or truncated) and iteration < seq_length:
+                # for intra-sequence resets, use smaller reset bounds
+                # resample environment
+                env = gym.make('random-cartpole-v0', frameskip=2, reset_bounds_scale=0.05)
+                env.set_task(task)
+                # resample exp_ratio
+                exp_ratio = random.uniform(0.20, 1.0)
+
                 obs, info = env.reset()
                 seq_obs.append(obs)
                 seq_bactions.append(2)
                 seq_lactions.append(0)
                 seq_rewards.append(reward)
                 iteration += 1
+
+
         arr_bactions.append(seq_bactions)
         arr_lactions.append(seq_lactions)
         arr_rewards.append(seq_rewards)
