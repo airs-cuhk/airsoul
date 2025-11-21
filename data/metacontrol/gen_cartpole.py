@@ -1,4 +1,3 @@
-# 环境准备（先执行安装命令）
 # pip install gym[classic_control] stable-baselines3[extra]
 import sys
 import os
@@ -7,6 +6,7 @@ import time
 import numpy as np
 import argparse
 import multiprocessing
+from multiprocessing import Process, Queue
 import gymnasium as gym
 import torch
 from stable_baselines3 import PPO
@@ -18,7 +18,7 @@ from xenoverse.metacontrol import sample_cartpole
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 def is_task_in_range(task, gravity_scope=(8.0, 12.0),
-                        mascart_scope=(0.8, 1.2),
+                        masscart_scope=(0.8, 1.2),
                         masspole_scope=(0.08, 0.12),
                         length_scope=(0.4, 0.6)):
     if(task["gravity"] > gravity_scope[1] or task["gravity"] < gravity_scope[0]):
@@ -31,27 +31,34 @@ def is_task_in_range(task, gravity_scope=(8.0, 12.0),
         return False
     return True
 
+def queue_to_list(q):
+    temp_list = []
+    while not q.empty():
+        temp_list.append(q.get())
+    return temp_list
+
+def sample_task(queue, gravity_scope, masscart_scope, masspole_scope, length_scope, remove_scope=None):
+    task = sample_cartpole(gravity_scope=gravity_scope,
+                            masscart_scope=masscart_scope,
+                            masspole_scope=masspole_scope,
+                            length_scope=length_scope)
+    if(remove_scope is not None):
+        while is_task_in_range(task, **remove_scope):
+            task = sample_cartpole(gravity_scope=gravity_scope,
+                                masscart_scope=masscart_scope,
+                                masspole_scope=masspole_scope,
+                                length_scope=length_scope)
+    queue.put(task)
+
 def dump_cartpole_record(
+    task,
     file_path,
-    seq_number=500,
-    seq_length=200,
-    gravity_scope=(2.0, 16.0),
-    masscart_scope=[0.5, 2.0],
-    masspole_scope=[0.05, 0.20],
-    length_scope=[0.25, 1.0]
+    seq_number,
+    seq_length
 ):
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     torch.set_num_threads(1)
     env = gym.make('random-cartpole-v0', frameskip=2)
-    task = sample_cartpole(gravity_scope=gravity_scope,
-                                masscart_scope=masscart_scope,
-                                masspole_scope=masspole_scope,
-                                length_scope=length_scope)
-    #while is_task_in_range(task):
-    #    task = sample_cartpole(gravity_scope=gravity_scope,
-    #                        masscart_scope=masscart_scope,
-    #                        masspole_scope=masspole_scope,
-    #                        length_scope=length_scope)
 
     env.set_task(task)
 
@@ -78,7 +85,7 @@ def dump_cartpole_record(
         seq_lactions = []
         seq_rewards = []
 
-        obs, info = env.reset(options={"low": -0.30, "high": 0.30})
+        obs, info = env.reset()
         seq_obs.append(obs)
         iteration = 0
         while iteration < seq_length:
@@ -126,100 +133,130 @@ def dump_cartpole_record(
 def dump_multi_records(
     rank_id,
     world_size,
+    task_queue,
     output_path,
     task_ids,
-    seq_number=500,
-    max_seq_number=512,
-    seq_length=200,
-    gravity_scope=(1.0, 15.0),
-    masscart_scope=[0.5, 2.0],
-    masspole_scope=[0.05, 0.20],
-    length_scope=[0.25, 1.0]):
-    oneshot = True
+    seq_number,
+    seq_length):
 
+    file_size = 256
+
+    task_number = len(task_queue)
 
     for task_id in task_ids:
-        if(rank_id == 0 and oneshot):
-            # Make sure original task is in training
-            use_g=(9.8, 9.8)
-            use_mc=(1.0, 1.0)
-            use_mp=(0.1, 0.1)
-            use_l=(0.5, 0.5)
-            oneshot = False
-        else:
-            use_g = gravity_scope
-            use_mc = masscart_scope
-            use_mp = masspole_scope
-            use_l = length_scope
-        if(seq_number > max_seq_number):
-            # Split the file if too large
-            chunk_number = seq_number // max_seq_number
-            for i in range(chunk_number):
-                file_path = "%s/record_%04d%04d/" % (output_path.rstrip('/'), task_id, i)
-                cur_seq_number = min(seq_number - i * max_seq_number, max_seq_number)
-                dump_cartpole_record(
-                    file_path,
-                    seq_number=cur_seq_number,
-                    seq_length=seq_length,
-                    gravity_scope=use_g,
-                    masscart_scope=use_mc,
-                    masspole_scope=use_mp,
-                    length_scope=use_l
-                )
-        else:
-            file_path = "%s/record_%04d/" % (output_path.rstrip('/'), task_id)
-            dump_cartpole_record(
-                file_path,
-                seq_number=seq_number,
-                seq_length=seq_length,
-                gravity_scope=use_g,
-                masscart_scope=use_mc,
-                masspole_scope=use_mp,
-                length_scope=use_l
-            )
-            print("Worker %d finished task %d, data saved to %s" % (rank_id, task_id, file_path))
+        task = task_queue[task_id % task_number]
+        file_path = "%s/record_%04d/" % (output_path.rstrip('/'), task_id)
+        dump_cartpole_record(
+            task,
+            file_path,
+            seq_number,
+            seq_length,
+        )
+        print("Worker %d finished task %d, data saved to %s" % (rank_id, task_id, file_path))
 
 if __name__=="__main__":
     # Parse the arguments, should include the output file name
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_path", type=str, default="./cartpole_data/", help="output directory, the data would be stored as output_path/record-xxxx.npy")
-    parser.add_argument("--seq_length", type=int, default=200, help="max steps, default:500")
+    parser.add_argument("--seq_length", type=int, default=200, help="max steps, default:200")
     parser.add_argument("--offpolicy_labeling", type=int, default=0, help="enable offpolicy labeling (DAgger), default:False")
-    parser.add_argument("--seq_number", type=int, default=100, help="sequence number, default:500")
     parser.add_argument("--task_number", type=int, default=8, help="task number, default:8")
     parser.add_argument("--start_index", type=int, default=0, help="start id of the record number")
     parser.add_argument("--workers", type=int, default=4, help="number of multiprocessing workers")
+    parser.add_argument("--task_seq_number", type=int, default=100, help="sequence number per task, default:100")
     parser.add_argument("--gravity_scope", type=float, nargs=2, default=(2.0, 16.0), help="gravity scope for the cartpole task")
     parser.add_argument("--masscart_scope", type=float, nargs=2, default=[0.5, 2.0], help="mass cart scope for the cartpole task")
     parser.add_argument("--masspole_scope", type=float, nargs=2, default=[0.05, 0.20], help="mass pole scope for the cartpole task")
     parser.add_argument("--length_scope", type=float, nargs=2, default=[0.20, 1.0], help="length scope for the cartpole task")
+    parser.add_argument("--remove_scope", type=bool, default=False, help="avoid selection from that scope")
+    parser.add_argument("--origin_in_scope", type=bool, default=True, help="whether make sure the original task is in the scope, default:True")
     args = parser.parse_args()
+
+    if(args.remove_scope):
+        remove_scope = {"gravity_scope":(8.0, 12.0),
+                        "masscart_scope":(0.8, 1.2),
+                        "masspole_scope":(0.08, 0.12),
+                        "length_scope":(0.4, 0.6)}
+    else:
+        remove_scope = None
 
     gravity_scope=args.gravity_scope
     masscart_scope=args.masscart_scope
     masspole_scope=args.masspole_scope
     length_scope=args.length_scope
+
+    # Task Generation
+    task_queue = Queue()
+    print("Generating Tasks At First...")
+    max_task_number = args.task_number
+    if(args.origin_in_scope):
+        # Make sure the original task is in the training set
+        task_queue.put({
+            "gravity": 9.8,
+            "masscart": 1.0,
+            "masspole": 0.1,
+            "length": 0.5
+        })
+        print("Original task added to the task queue.")
+        max_task_number -= 1
+    if(max_task_number > 0):
+        task_workers = min(args.workers, max_task_number)
+        worker_splits = int((max_task_number - 1) // task_workers + 1)
+        processes = []
+        n_b_t = 0
+        for worker_id in range(task_workers):
+            n_e_t = min(n_b_t + worker_splits, max_task_number)
+            n_b = int(n_b_t)
+            n_e = int(n_e_t)
+            if(n_e_t - n_b_t < 1):
+                break
+            print("start processes generating tasks %04d to %04d" % (n_b, n_e))
+            process = multiprocessing.Process(target=sample_task,
+                    args=(task_queue,
+                        gravity_scope,
+                        masscart_scope,
+                        masspole_scope,
+                        length_scope,
+                        remove_scope))
+            processes.append(process)
+            process.start()
+            n_b_t = n_e_t
+        for process in processes:
+            process.join()
+    print("Task Generation Finished.")
+
+    task_queue = queue_to_list(task_queue)
+    task_number = len(task_queue)
+
+    print("Start Data Generation...")
     # Data Generation
-    worker_splits = args.task_number / args.workers + 1.0e-6
+    data_workers = args.workers
+    data_number = task_number * args.task_seq_number
+    worker_splits = int((data_number - 1) // data_workers + 1)
+    seq_number = min(args.task_seq_number, 512) # max file_size
+    worker_taskids = (data_number - 1) // (seq_number * data_workers) + 1
+    total_taskids = worker_taskids * data_workers
+
+    print("Total data number: %d, each worker will generate %d directories, \
+            with each directory containing %d sequences." % (
+            data_number, worker_taskids, seq_number))
     processes = []
     n_b_t = args.start_index
-    for worker_id in range(args.workers):
-        n_e_t = n_b_t + worker_splits
+    for worker_id in range(data_workers):
+        n_e_t = min(n_b_t + worker_taskids, total_taskids + args.start_index)
         n_b = int(n_b_t)
         n_e = int(n_e_t)
+        if(n_e_t - n_b_t < 1):
+            break
 
         print("start processes generating %04d to %04d" % (n_b, n_e))
         process = multiprocessing.Process(target=dump_multi_records,
                 args=(worker_id, args.workers,
+                        task_queue,
                         args.output_path,
                         range(n_b, n_e),
-                        args.seq_number,
-                        512,
-                        args.seq_length,
-                        gravity_scope,
-                        masscart_scope,
-                        masspole_scope,
-                        length_scope))
+                        seq_number,
+                        args.seq_length))
         processes.append(process)
         process.start()
 
