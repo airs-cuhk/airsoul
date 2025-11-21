@@ -36,7 +36,7 @@ def string_mean_var(downsample_length, res):
     return string
 
 @EpochManager
-class OmniRLEpoch:
+class OmniRLQuadEpoch:
     def __init__(self, **kwargs):
         for key in kwargs:
             setattr(self, key, kwargs[key])
