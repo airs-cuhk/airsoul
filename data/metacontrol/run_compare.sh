@@ -9,11 +9,17 @@ nohup python evaluate_diff.py \
 function run_diff_num {
 	echo "Start Processing $1"
 	run_diff C B $1
-	run_diff D B $1
-	run_diff E B $1
 	run_diff C C $1
-	run_diff D C $1
-	run_diff E C $1
+	#run_diff F B $1
+	#run_diff D C $1
+	#run_diff E C $1
+	#run_diff F C $1
 }
 
-run_diff_num $1
+for i in {0..64}; do
+    ID=$(printf "%03d" $i)
+
+    run_diff_num "$ID"
+
+    sleep 120
+done

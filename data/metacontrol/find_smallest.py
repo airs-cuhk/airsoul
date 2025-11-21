@@ -12,4 +12,4 @@ if __name__=='__main__':
             tokens = rec.strip().split()
             vals.append(float(tokens[-1]))
         idx = numpy.argmin(vals)
-        print(recs[idx])
+        sys.stdout.write(recs[idx])

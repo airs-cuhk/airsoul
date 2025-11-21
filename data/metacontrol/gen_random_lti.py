@@ -33,11 +33,11 @@ class NoiseScheduler:
     def __init__(self, seq_length):
         self.max_beta = random.random()
         self.max_sigma = random.uniform(-0.10, 1.0)
-        self.step_scheduler_beta = RandomFourier(max_steps=seq_length, max_order=8, max_item=4)
-        self.step_scheduler_sigma = RandomFourier(max_steps=seq_length, max_order=8, max_item=4)
+        self.step_scheduler_beta = RandomFourier(1, max_steps=seq_length, max_order=8, max_item=4)
+        self.step_scheduler_sigma = RandomFourier(1, max_steps=seq_length, max_order=8, max_item=4)
 
     def disturb(self, action, step):
-        beta = np.max(self.step_scheduler_beta(step), 0.0) * self.max_beta
+        beta = np.maximum(self.step_scheduler_beta(step), 0.0) * self.max_beta
         sigma = np.abs(self.step_scheduler_sigma(step)) * self.max_sigma
         return np.sqrt(1 - beta) * action + np.sqrt(beta) * np.random.normal(0, 1, size=action.shape) * sigma
 
@@ -183,7 +183,7 @@ if __name__=="__main__":
 
         print("start processes generating %04d to %04d" % (n_b, n_e))
         process = multiprocessing.Process(target=dump_multi_records,
-                args=(worker_id, args.workers,
+                args=(worker_id,
                         task_queue,
                         range(n_b, n_e),
                         args.output_path,
