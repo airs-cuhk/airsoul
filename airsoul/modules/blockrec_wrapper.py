@@ -104,3 +104,6 @@ class BlockRecurrentWrapper(nn.Module):
             new_cache = None
 
         return output, new_cache
+    
+    def get_mem(self):
+        return self.memory

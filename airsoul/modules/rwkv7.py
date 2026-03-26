@@ -13,9 +13,11 @@ class RWKV7Layer(nn.Module):
                 num_heads: int = 4,
                 layer_idx: int = 0):
         super().__init__()
+        head_dim = io_size // num_heads
         self.config = RWKV7Config(
                   hidden_size=io_size,
                   intermediate_size=intermediate_size,
+                  head_dim=head_dim,
                   num_heads=num_heads)
         self.layer_idx = layer_idx
         if layer_idx == 0:
@@ -44,6 +46,9 @@ class RWKV7Layer(nn.Module):
 
         out, _, new_cache_, v_first = self.encoder(hidden_states=x, past_key_values=cache_, use_cache=use_cache, v_first=v_first)
 
-        new_cache = (new_cache_.states[0], v_first)
+        # new_cache = (new_cache_.states[0], v_first)
+        # new_cache = (new_cache_.layers[0].state, v_first)
+        new_cache = (new_cache_[0], v_first)
+        
 
         return out, new_cache

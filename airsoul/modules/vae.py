@@ -15,14 +15,14 @@ class VAE(nn.Module):
         self.decoder = decoder
         self.layer_mean = nn.Linear(encoder.output_size, hidden_size)
         self.layer_var = nn.Linear(encoder.output_size, hidden_size)
-        self.layer_norm = nn.LayerNorm(hidden_size)
+        # self.layer_norm = nn.LayerNorm(hidden_size)
     
     def forward(self, inputs):
         # input shape: [B, NT, C, W, H]
         nB, nT, nC, nW, nH = inputs.shape
         hidden = self.encoder(inputs.reshape(nB * nT, nC, nW, nH))
         z_exp = self.layer_mean(hidden)
-        z_exp = self.layer_norm(z_exp)
+        # z_exp = self.layer_norm(z_exp)
         z_log_var = self.layer_var(hidden)
         return z_exp.reshape(nB, nT, self.hidden_size), z_log_var.reshape(nB, nT, self.hidden_size)
 

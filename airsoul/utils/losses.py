@@ -19,6 +19,7 @@ def ent_loss(act_out):
 def focal_loss(out, gt, gamma=0):
     gt_logits = F.one_hot(gt, out.shape[-1])
     preds = torch.log(out + 1.0e-10) * ((1.0 - out) ** gamma)
+    # print(f"out: {out}, gt: {gt}, preds: {preds}")
     return -torch.sum(preds * gt_logits, dim=-1)
 
 def metrics(out, gt=None, loss_type='mse', **kwargs):
@@ -94,7 +95,7 @@ def weighted_loss(out, loss_wht=None, reduce_dim=1, need_cnt=False, **kwargs):
             else:
                 assert loss_wht.ndim == 2
                 assert loss_wht.shape[0] == loss_array.shape[0]
-            assert loss_wht.shape[1] == loss_array.shape[1]
+            assert loss_wht.shape[1] == loss_array.shape[1], f"Weight dimensions must match loss array dimensions, got {loss_wht.shape} and {loss_array.shape}"
             
             # Mean over dimension 0
             loss_array = loss_array * loss_wht

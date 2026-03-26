@@ -5,14 +5,15 @@ from torch.nn import functional as F
 from .recursion import PRNN, SimpleLSTM
 from .block_wrapper import MultiBlocks
 from .transformers import ARTransformerEncoder
-from .mamba import MambaBlock
+# from .mamba import MambaBlock
 from .blockrec_wrapper import BlockRecurrentWrapper
 from .gsa import GLABlock, GSABlock
 from .rwkv6 import RWKV6Layer
 from .rwkv7 import RWKV7Layer
 from .deltanet import GatedDeltaNet
-from .mamba2 import Mamba2Layer
-from .sparse_attention import NSATransformerEncoder
+from .kda import KDALayer
+# from .mamba2 import Mamba2Layer
+# from .sparse_attention import NSATransformerEncoder
 
 class CausalBlock(nn.Module):
     """
@@ -126,8 +127,17 @@ class CausalBlock(nn.Module):
                 io_size=config.hidden_size,
                 intermediate_size=config.inner_hidden_size,
                 num_heads=config.nhead,
-                expand_v = config.expand_v
-            )           
+                expand_v=config.expand_v
+            )
+        elif(self.model_type == "kda"):
+            main_encoder = MultiBlocks(
+                KDALayer,
+                config.num_layers,
+                need_block_wrapper=False,
+                io_size=config.hidden_size,
+                num_heads=config.nhead,
+                expand_v=config.expand_v,
+            )                 
         else:
             raise Exception("No such causal model: %s" % config.model_type)
         
@@ -161,6 +171,9 @@ class CausalBlock(nn.Module):
         kwargs["checkpoints_density"] = self.checkpoints_density
         out, cache = self.layers.forward(*args, **kwargs)
         return self.layer_norm(out), cache
+    
+    def get_mem(self):
+        return self.layers.get_mem()
     
     def reset(self):
         if(self.need_reset):

@@ -25,11 +25,18 @@ class BaseDataLoader(DataLoader):
 
     def __iter__(self):
         self.index = self.rank
+        start_index = getattr(self.dataset, "start_index", 0)
+        if self.data_volume > 0:
+            start_index = start_index % self.data_volume
+        self.index = self.rank + start_index
         self.local_index = 0
         # Set the random shuffler for the data loader
         self.iter += 1
-        torch.manual_seed(self.iter)
-        self.index_shuffler = torch.randperm(self.data_volume).tolist()
+        if getattr(self.dataset, "sequential", False):
+            self.index_shuffler = list(range(self.data_volume))
+        else:
+            torch.manual_seed(self.iter)
+            self.index_shuffler = torch.randperm(self.data_volume).tolist()
         return self
 
     def __next__(self):
@@ -149,11 +156,19 @@ class PrefetchDataLoader(BaseDataLoader):
         self.local_index = 0
         self.index = self.rank
         self.prefetch_index = self.rank
+        start_index = getattr(self.dataset, "start_index", 0)
+        if self.data_volume > 0:
+            start_index = start_index % self.data_volume
+        self.index = self.rank + start_index
+        self.prefetch_index = self.rank + start_index
 
         # Set the random shuffler for the data loader
         self.iter += 1
-        torch.manual_seed(self.iter)
-        self.index_shuffler = torch.randperm(self.data_volume).tolist()
+        if getattr(self.dataset, "sequential", False):
+            self.index_shuffler = list(range(self.data_volume))
+        else:
+            torch.manual_seed(self.iter)
+            self.index_shuffler = torch.randperm(self.data_volume).tolist()
 
         self.cache = {}
         self.prefetch()

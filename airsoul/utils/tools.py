@@ -124,6 +124,18 @@ def memory_cpy(cache):
     else:
         return cache
 
+def model_path(save_model_path, epoch_id, *optimizers):
+    directory_path = '%s/ckpt_%02d/' % (save_model_path, epoch_id)
+    if not os.path.exists(directory_path):
+        os.makedirs(directory_path)
+    if(len(optimizers) < 1):
+        return f'{directory_path}/model.pth'
+    else:
+        ret_str = [f'{directory_path}/model.pth']
+        for opt in optimizers:
+            ret_str.append(f'{directory_path}/{opt}.pth')
+    return tuple(ret_str)
+
 def reset_optimizer_state(optimizer):
     state = optimizer.state
     for k in list(state.keys()):
@@ -160,9 +172,16 @@ def print_memory(info="Default"):
 
 def custom_save_model(model, save_model_path, 
                       object_name, meta_info,
-                      name_key="epochs", appendix=""):
+                      name_key="epochs", appendix="",
+                      optimizer=None, lr_scheduler=None, scaler=None):
     check_model_validity(model.module)
     data = {"metadict_models":model.state_dict()}
+    if(optimizer is not None):
+        data["optimizer_state"] = optimizer.state_dict()
+    if(lr_scheduler is not None):
+        data["lr_scheduler_state"] = lr_scheduler.state_dict()
+    if(scaler is not None):
+        data["scaler_state"] = scaler.state_dict()
     for key in meta_info:
         data[f"metadict_{object_name}_{key}"] = meta_info[key]
     if(name_key not in meta_info):
@@ -170,8 +189,10 @@ def custom_save_model(model, save_model_path,
         name = 'default'
     else:
         name = meta_info[name_key]
-    torch.save(data, save_model_path + f"/ckpt_{name}{appendix}.pth")
-
+    if not os.path.exists(save_model_path):
+        os.makedirs(save_model_path)
+    torch.save(data, save_model_path + f"/ckpt_{name_key}_{name}_{appendix}.pth")
+    
 def custom_load_model(model,
                       state_dict_path,
                       black_list=[], 
@@ -188,8 +209,12 @@ def custom_load_model(model,
 
     saved_metainfo = torch.load(state_dict_path, weights_only=False) 
     metainfo = dict()
+    extra_states = dict()
+    print("---------------loading checkpoint from ", state_dict_path, "---------------")
+    
     if("metadict_models" in saved_metainfo):
         saved_state_dict = saved_metainfo["metadict_models"]
+        print(f"{saved_metainfo.keys()}, Metainfo in the checkpoint:")
         for key in saved_metainfo:
             toks = key.split('_')
             """
@@ -199,6 +224,8 @@ def custom_load_model(model,
                 if(toks[1] not in metainfo):
                     metainfo[toks[1]] = dict()
                 metainfo[toks[1]][toks[2]] = saved_metainfo[key]
+            elif(key.endswith("_state")):
+                extra_states[key] = saved_metainfo[key]
     else:
         saved_state_dict = saved_metainfo
 
@@ -263,4 +290,41 @@ def custom_load_model(model,
       
     model.load_state_dict(matched_state_dict, strict=False)  
     log_debug("-" * 20, f"Load model success", "-" * 20, on=verbose)
-    return model, metainfo
+    return model, metainfo, extra_states
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def separate_ddp_model(state_dict_path):
+    """
+    Separate DDP (Distributed Data Parallel) model to get the original model
+    """
+    print(state_dict_path)
+    state_dict = torch.load(state_dict_path, weights_only=False)
+    if("metadict_models" in state_dict):
+        state_dict = state_dict["metadict_models"]
+    # state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        if k.startswith("module."):
+            new_state_dict[k[7:]] = v
+        else:
+            print(f"Key {k} does not start with 'module.'")
+            new_state_dict[k] = v
+    
+    return new_state_dict        
+    # msg = model.load_state_dict(new_state_dict, strict=False)
+    # logger.info("Pretrained weights loaded with msg: {}".format(msg))
+    # return model

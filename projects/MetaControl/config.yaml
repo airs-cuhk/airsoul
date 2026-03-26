@@ -211,11 +211,21 @@ train_config:
     use_scaler: False
 
 test_config:
-    batch_size: 16
-    data_path: [Path]
-    output: "./offline_eval/"
-    seq_len: 16000
-    seg_len: 4000
+  datasets:
+    - name: [TEST_NAME]
+      data_path: [Path]
+      batch_size: 4
+      seq_len: 5000
+      seg_len: 2500
+      output: [Path]/validate.txt
+      log_dir: [Path]
+    - name: [TEST_NAME]
+      data_path: [Path]
+      batch_size: 4
+      seq_len: 5000
+      seg_len: 2500
+      output: [Path]/validate.txt
+      log_dir: [Path]
 
 generator_config:
     agent_num: 1 # If env=switch, set agent_num=2, use MultiAgentGenerator class in generate.py
