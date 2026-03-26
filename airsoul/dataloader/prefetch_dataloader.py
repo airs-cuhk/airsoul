@@ -66,10 +66,10 @@ class BaseDataLoader(DataLoader):
     def __len__(self):
         return self.length
 
-def worker_fn(dataset, length, index_queue, output_queue, i_worker):
+def worker_fn(dataset, length, index_queue, output_queue):
     while True:
         try:
-            index = index_queue.get(timeout=5)
+            index = index_queue.get(timeout=0)
         except queue.Empty:
             continue
         if index is None:
@@ -111,10 +111,10 @@ class PrefetchDataLoader(BaseDataLoader):
         self.worker_cycle = itertools.cycle(range(num_workers))
         self.cache = {}
 
-        for i_worker in range(num_workers):
+        for _ in range(num_workers):
             index_queue = multiprocessing.Queue()
             worker = multiprocessing.Process(
-                target=worker_fn, args=(self.dataset, self.data_volume, index_queue, self.output_queue, i_worker)
+                target=worker_fn, args=(self.dataset, self.data_volume, index_queue, self.output_queue)
             )
             worker.daemon = True
             worker.start()
@@ -127,8 +127,7 @@ class PrefetchDataLoader(BaseDataLoader):
         """
         while (self.prefetch_index < self.index + self.prefetch_batches * self.batch_size * self.world_size):
             real_prefetch_index = self.index_shuffler[self.prefetch_index % self.data_volume]
-            queue_id = next(self.worker_cycle)
-            self.index_queues[queue_id].put(real_prefetch_index)
+            self.index_queues[next(self.worker_cycle)].put(real_prefetch_index)
             self.prefetch_index += self.world_size
 
     def get(self):
@@ -139,7 +138,7 @@ class PrefetchDataLoader(BaseDataLoader):
             item = self.cache.pop(real_index)
         else:
             try:
-                (fetch_index, data) = self.output_queue.get(timeout=20)
+                (fetch_index, data) = self.output_queue.get(timeout=60)
                 if real_index == fetch_index:
                     item = data
                 else:

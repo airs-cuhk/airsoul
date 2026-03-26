@@ -1,0 +1,7 @@
+name: robothor
+target_object_types:
+  - "Bed"
+  - "Chair"
+  - "FloorLamp"
+  - "Sofa"
+  - "Television"

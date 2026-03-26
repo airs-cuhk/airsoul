@@ -12,6 +12,7 @@ class GLABlock(nn.Module):
                 layer_idx: int=0,
                 is_generate: bool=False):
         super().__init__()
+        
         self.hidden_size = io_size
         self.layer_idx = layer_idx
         if(not is_generate):
@@ -35,7 +36,6 @@ class GLABlock(nn.Module):
 
         # Notice that cache is changed in-place
         out, _, new_cache = self.encoder(hidden_states=x, past_key_values=cache, use_cache=use_cache)
-
         return out, new_cache.states[0]
     
 class GSABlock(GLABlock):
@@ -43,6 +43,7 @@ class GSABlock(GLABlock):
                 io_size: int=512,
                 num_heads: int=4,
                 num_slots: int=4,
+                gate_bound: float=50,
                 layer_idx: int=0,
                 is_generate: bool=False):
         super().__init__()
@@ -57,4 +58,5 @@ class GSABlock(GLABlock):
                   hidden_size=io_size,
                   num_heads=num_heads,
                   num_slots=num_slots,
+                  gate_bound=gate_bound,
                   layer_idx=0)

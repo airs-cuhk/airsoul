@@ -83,7 +83,8 @@ class BlockRecurrentWrapper(nn.Module):
             return memory_cpy(cache)
         else:
             log_fatal(f"No such memory type: {self.memory_type}")
-            
+    def get_o_list(self):
+        return self.temporal_module.get_o_list()
     def forward(self, src, cache=None, need_cache=False, verbose=True, checkpoints_density=-1, update_memory=True):
         # when update memory = False, inference won't update the memory, but will update the cache
         # by default the shape of src should be (batch_size, seq_len, dim)
@@ -93,11 +94,16 @@ class BlockRecurrentWrapper(nn.Module):
                 cache=self.merge_memory_in_cache(cache), 
                 need_cache=True, 
                 checkpoints_density=checkpoints_density)
+        # print("block-recurrent-wrapper: new_cache", new_cache[0].keys())
+        # print(len(new_cache[0]['recurrent_state']))
+        # print(new_cache[0]['recurrent_state'][0].shape)
 
         if(update_memory):
             new_cache = self.update_memory_cache(new_cache)
             # Update the position at the same time
             self.position += src.shape[1]
+            if need_cache:
+                new_cache = memory_cpy(self.memory)
         elif(need_cache):
             new_cache = self.update_cache_only(new_cache)
         else:

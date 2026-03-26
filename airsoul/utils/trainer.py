@@ -245,6 +245,7 @@ def EpochManager(cls):
                 if not self.stateful_training:
                     self.model.module.reset()
                 if(self.is_training):
+                    # print("Training mode")
                     self.model.train()
                     self.optimizer.zero_grad()
                     if(use_bf16):
@@ -317,6 +318,7 @@ def EpochManager(cls):
                         # torch.save(self.model.state_dict(), iter_model_path)
                     need_break = True
 
+                
                 if(not self.is_training):
                     log_progress((batch_id + 1) / data_length, on=self.main)
 
