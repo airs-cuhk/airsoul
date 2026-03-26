@@ -35,7 +35,10 @@ class LMEpoch:
             else:
                 self.downsample_length = 100
 
-    def compute(self, feas, labs, epoch_id=-1, batch_id=-1):
+    def compute(self, feas, labs, 
+                local_batch_id=-1,
+                global_batch_id=-1,
+                global_epoch_id=-1):
         """
         Defining the computation function for each batch
         """
@@ -65,8 +68,8 @@ class LMEpoch:
             if(self.logger is not None):
                 self.logger(self.optimizer.param_groups[0]['lr'],
                         stat_res["train_perplexity"]["mean"],
-                        epoch=epoch_id,
-                        iteration=batch_id)
+                        epoch=global_epoch_id,
+                        iteration=local_batch_id)
         else:
             perpl = torch.cat([loss["perplexity"] / loss["count"] for loss in losses], dim=1)
             counts = torch.cat([loss["count"] for loss in losses], dim=1)

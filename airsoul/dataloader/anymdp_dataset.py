@@ -91,7 +91,7 @@ class AnyMDPv2DataSet(AnyMDPDataSetBase):
             return None
 
         obs_arr = torch.from_numpy(data[0]).float()
-        pro_arr = torch.from_numpy(data[1].astype("int32")).long() 
+        pro_arr = torch.from_numpy(data[1].astype("int32")).long()
         tag_arr = torch.from_numpy(data[2].astype("int32")).long() 
         bact_arr = torch.from_numpy(data[3]).float()
         rwd_arr = torch.from_numpy(data[4]).float()

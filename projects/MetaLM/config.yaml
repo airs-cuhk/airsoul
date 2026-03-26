@@ -2,6 +2,9 @@
 run_name: YOUR_NAME_TO_RUN
 master_port: "12402"
 load_model_path: [Path or None]
+reset_metainfo:
+  epochs: 0
+monitor_dir: ./runs/monitor/
 
 log_config:
   use_tensorboard: True

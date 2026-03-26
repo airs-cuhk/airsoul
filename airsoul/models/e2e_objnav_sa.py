@@ -10,7 +10,7 @@ from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint  
 from airsoul.utils import weighted_loss, img_pro, img_post
 from airsoul.utils import parameters_regularization, count_parameters
-from airsoul.modules import ImageEncoder, ImageDecoder, VAE
+from airsoul.modules import ImageEncoder, ImageDecoder, VAE, MLPEncoder
 from .decision_model import SADecisionModel, POTARDecisionModel
 
 class E2EObjNavSA(nn.Module):
@@ -32,6 +32,12 @@ class E2EObjNavSA(nn.Module):
         else:
             self.frozen_causal_block = False
         print("frozen_causal_block: ", self.frozen_causal_block)
+        
+        if hasattr(config, 'unlock_vae'):
+            self.unlock_vae = config.unlock_vae
+        else:
+            self.unlock_vae = False
+        print("unlock_vae: ", self.unlock_vae)
 
         loss_weight = torch.cat((
                     torch.linspace(0.0, 1.0, config.context_warmup),
@@ -39,7 +45,7 @@ class E2EObjNavSA(nn.Module):
         loss_weight = loss_weight / torch.sum(loss_weight)
 
         self.register_buffer('loss_weight', loss_weight)
-
+        print("self.loss_weight", self.loss_weight.shape)
         self.nactions = config.action_dim
         self.state_dtype = config.decision_block.state_encode.input_type
         self.action_dtype = config.decision_block.action_encode.input_type
@@ -103,12 +109,20 @@ class E2EObjNavSA(nn.Module):
         self.img_encoder.requires_grad_(False)
         self.img_decoder.requires_grad_(False)
         self.vae.requires_grad_(False)
+        
+        # self.img_encoder.requires_grad_(True)
+        # self.img_decoder.requires_grad_(True)
+        # self.vae.requires_grad_(True)
         self.decision_model.requires_grad_(True)
 
         if self.frozen_causal_block:
             # print("frozen causal block vae")
             self.decision_model.causal_model.requires_grad_(False)
         
+        if self.unlock_vae:
+            self.vae.requires_grad_(True)
+            self.img_encoder.requires_grad_(True)
+            self.img_decoder.requires_grad_(True)
         
 
         inputs = img_pro(observations)
@@ -321,6 +335,7 @@ class E2EObjNavSA(nn.Module):
             obs = obs.unsqueeze(0)
         if(single_step and obs.dim() < 5):
             obs = obs.unsqueeze(1)
+            assert obs.shape[1] == 1, f"Input dimension of observations must be 5, acquire {obs.dim()}"
             
         obs = img_pro(obs)
         if(raw_images):
@@ -587,6 +602,75 @@ class E2EObjNavSA(nn.Module):
         else:
             obs_out = None
         act_distribution = act_pred
+        # print(act_distribution)
+        if(need_numpy):
+            obs_out = obs_out.cpu().detach().numpy()
+            act_out = act_out.cpu().detach().numpy()
+            act_distribution = act_pred.cpu().detach()
+        if need_distribution:
+            # act_out = act_pred.cpu().detach().numpy()
+            return obs_out, act_out, cache, act_distribution
+        return obs_out, act_out, cache
+
+
+
+
+    def MutiBatchPolicy(self, prompt, observation, update_memory = True, 
+               need_cache = False, cache = None, raw_images=True, need_numpy=True, need_distribution=False, 
+               temperature=1.0, mask=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]):
+
+        mask = torch.tensor(mask, dtype=torch.float32)
+        assert mask.shape[-1] == 17, f"Mask shape must be [1, 17], but got {mask.shape}"
+        mask = mask.unsqueeze(0).unsqueeze(0)  # [1, 1, 17]
+        mask = mask.to(next(self.parameters()).device)
+
+        rec_z = self.preprocess_observation(
+            observation, 
+            single_batch=False, 
+            single_step=True, 
+            raw_images=raw_images)
+        prompt = self.preprocess_others(prompt, single_batch=False, single_step=True, default_dim=1)
+        tags = None
+        rewards = None
+        ext_act = torch.zeros((rec_z.shape[0], 1), dtype=torch.int64).to(next(self.parameters()).device)
+        # ext_act[0, 0] = 10 # Trick?
+        with torch.no_grad():
+            # Step 1: Predict the next_action, do not update memory and cache
+            wm_out, pm_out, _ = self.decision_model(rec_z, 
+                                            prompt,
+                                            None,  # No tags, which is None
+                                            ext_act, 
+                                            None,  # No rewards, which is None
+                                            cache=cache, need_cache=False, 
+                                            state_dropout=0.0,
+                                            update_memory=False)
+            _, act_pred, _ = self.decision_model.post_decoder(wm_out, pm_out, T=temperature)
+            if self.config.decision_block.action_diffusion.enable:
+                act_pred = self.decision_model.s_diffusion.inference(cond=pm_out)[-1]
+            # Apply mask to the action prediction
+            act_pred = act_pred * mask
+            act_out = self.sample_action_discrete(act_pred)
+            # act_out = self.sample_max_action_discrete(act_pred)
+            
+            # Step 2: in context learning the next p o a  
+            wm_out, pm_out, cache = self.decision_model(rec_z, 
+                                            prompt,
+                                            None, 
+                                            act_out, 
+                                            None,
+                                            cache=cache, need_cache=need_cache, 
+                                            update_memory=update_memory)
+            z_out, _, _ = self.decision_model.post_decoder(wm_out, pm_out)
+            if self.config.decision_block.state_diffusion.enable:
+                z_out = self.decision_model.s_diffusion.inference(cond=wm_out)[-1]
+            
+        # Post Processing
+        if(raw_images):
+            obs_out = img_post(self.vae.decoding(z_out))
+        else:
+            obs_out = None
+        act_distribution = act_pred
+        # print(act_distribution)
         if(need_numpy):
             obs_out = obs_out.cpu().detach().numpy()
             act_out = act_out.cpu().detach().numpy()

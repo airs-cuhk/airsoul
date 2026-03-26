@@ -1,10 +1,10 @@
-# AIRSoul : Towards the Next Generation Foundation Model for Embodied Agents
-Embodied AI faces key challenges in generalization and adaptation to different environments, cross-embodiments, and variant tasks. We believe in-weight learning (IWL) and scaling laws alone can not efficiently solve these problems. 
+# AIRSoul : Towards the General-Purpose Foundation Model for Interactive and Embodied Agents
+Embodied AI encounters significant challenges in generalizing across varying environments, embodiments, and tasks. AIRSoul does not attempt to overcome these challenges through zero-shot generalization or parametric memory. Instead, we address these tasks using gradient-free black-box learning: Multi-Paradigm In-Context Learning. AIRSoul aims to construct a general-purpose learning machine with the following characteristics:
 
-AIRSoul is towarding building general-purpose in-context learning (ICL) agents featured with the following characteristics:
-- Generalized ICL: Ability to address novel tasks with reinforcement learning, imitation learning, and self-supervised learning.
-- Long-horizon ICL: Ability to complex tasks requiring a huge number of steps at minimum.
-- Continual Learning in ICL: Learning and switching among a wide range of tasks without catastrophic forgetting.
+- Scalable ICL Incentivization: Incentivizing ICL in a training efficient manner.
+- Multi-Paradigm ICL: The capability to tackle novel tasks by integrating reinforcement learning, imitation learning, self-supervised learning, and other learning methods within a unified model.
+- Long-Context ICL: The ability to learn highly complex novel tasks that require a substantial number of steps with minimal effort.
+- In-Context Continual Learning (ICCL): The potential for continual learning and even lifelong learning within context.
 
 # Directory Structure
 - [projects](./projects): implementations of model training and validating for different benchmarks and projects.
@@ -12,7 +12,7 @@ AIRSoul is towarding building general-purpose in-context learning (ICL) agents f
     - [MazeWorld](./projects/MazeWorld) foundation model for [Xenoverse MazeWorld](https://github.com/FutureAGI/Xenoverse/tree/main/xenoverse/mazeworld)
     - [OmniRL](./projects/OmniRL) foundation model for [Xenoverse AnyMDP](https://github.com/FutureAGI/Xenoverse/tree/main/xenoverse/anymdp)
 
-- `data`: For general-purpose learning to learn, we generate the datasets by procedurally sampling tasks and use expert's demonstration for imitation learning and self-supervised learning. This directory contains the scripts to generate unlimited datasets for training.
+- `data`: Contains the scripts to generate mega-datasets for training.
 
 - `airsoul`: contains the building blocks and utils of different models
     - `modules`: contains the basic blocks

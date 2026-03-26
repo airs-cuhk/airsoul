@@ -67,6 +67,25 @@ def safety_check(tensor, replacement=None, msg=None, on=True):
 
     return tensor, risk_level
 
+def check_model_validity(model, verbose=False, level=1):
+    """
+    Check the validity of model in RunTime
+    level: 0 -> only accept all parameters l2 norm < 1e+6
+           1 -> only accept all valid parameters
+    """
+    param_isnormal = dict()
+    max_risk = 0
+    for param_name, param_tensor in model.named_parameters():
+        if(not param_tensor.requires_grad):
+            continue # Neglect non-trainable parameters
+
+        safe_param, risk = safety_check(param_tensor, 
+                                        msg=f"checking parameters: {param_name}",
+                                        on=verbose)
+        max_risk = max(risk, max_risk)
+
+    return (max_risk > level)
+
 def format_cache(cache, prefix=''):
     if(cache is None):
         return prefix + ' None'
@@ -151,8 +170,31 @@ def print_memory(info="Default"):
             "Memory cached:", 
             torch.cuda.memory_cached())
 
-def custom_load_model(model, 
-                      state_dict_path, 
+def custom_save_model(model, save_model_path, 
+                      object_name, meta_info,
+                      name_key="epochs", appendix="",
+                      optimizer=None, lr_scheduler=None, scaler=None):
+    check_model_validity(model.module)
+    data = {"metadict_models":model.state_dict()}
+    if(optimizer is not None):
+        data["optimizer_state"] = optimizer.state_dict()
+    if(lr_scheduler is not None):
+        data["lr_scheduler_state"] = lr_scheduler.state_dict()
+    if(scaler is not None):
+        data["scaler_state"] = scaler.state_dict()
+    for key in meta_info:
+        data[f"metadict_{object_name}_{key}"] = meta_info[key]
+    if(name_key not in meta_info):
+        log_warn(f"{name_key} not in the dicts, only f{meta_info.keys()} are available")
+        name = 'default'
+    else:
+        name = meta_info[name_key]
+    if not os.path.exists(save_model_path):
+        os.makedirs(save_model_path)
+    torch.save(data, save_model_path + f"/ckpt_{name_key}_{name}_{appendix}.pth")
+    
+def custom_load_model(model,
+                      state_dict_path,
                       black_list=[], 
                       strict_check=False, 
                       verbose=False):  
@@ -162,7 +204,31 @@ def custom_load_model(model,
     strick_check: if true, parameters with NAN/INF and mismatching shape will cause error
         otherwise, they will be replaced by zero and matched with maximum shared parts
     """
-    saved_state_dict = torch.load(state_dict_path, weights_only=False)  
+    if(not os.path.exists(state_dict_path)):
+        log_fatal(f"State dict path {state_dict_path} does not exist, quit job...")
+
+    saved_metainfo = torch.load(state_dict_path, weights_only=False) 
+    metainfo = dict()
+    extra_states = dict()
+    print("---------------loading checkpoint from ", state_dict_path, "---------------")
+    
+    if("metadict_models" in saved_metainfo):
+        saved_state_dict = saved_metainfo["metadict_models"]
+        print(f"{saved_metainfo.keys()}, Metainfo in the checkpoint:")
+        for key in saved_metainfo:
+            toks = key.split('_')
+            """
+            format: metadict_TrainMaze_steps
+            """
+            if(len(toks) == 3 and toks[0] == 'metadict'):
+                if(toks[1] not in metainfo):
+                    metainfo[toks[1]] = dict()
+                metainfo[toks[1]][toks[2]] = saved_metainfo[key]
+            elif(key.endswith("_state")):
+                extra_states[key] = saved_metainfo[key]
+    else:
+        saved_state_dict = saved_metainfo
+
     matched_state_dict = {} 
 
     # Notice: load only trainable parameters
@@ -224,72 +290,41 @@ def custom_load_model(model,
       
     model.load_state_dict(matched_state_dict, strict=False)  
     log_debug("-" * 20, f"Load model success", "-" * 20, on=verbose)
-    return model  
+    return model, metainfo, extra_states
 
-def check_model_validity(model, verbose=False, level=1):
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def separate_ddp_model(state_dict_path):
     """
-    Check the validity of model in RunTime
-    level: 0 -> only accept all parameters l2 norm < 1e+6
-           1 -> only accept all valid parameters
+    Separate DDP (Distributed Data Parallel) model to get the original model
     """
-    param_isnormal = dict()
-    max_risk = 0
-    for param_name, param_tensor in model.named_parameters():
-        if(not param_tensor.requires_grad):
-            continue # Neglect non-trainable parameters
-
-        safe_param, risk = safety_check(param_tensor, 
-                                        msg=f"checking parameters: {param_name}",
-                                        on=verbose)
-        max_risk = max(risk, max_risk)
-
-    return (max_risk > level)
-
-def plotLongDemo(predictions, reals, save_path):
-    import os
-    import PIL.Image as Image
-    frame_count = 0
-    whole_ARimage = None
-    # To concatenate the whole images by 2xN 
-    
-    real = reals
-    icsl_predict = predictions
-    if isinstance(real, torch.Tensor):
-        real = real.detach().cpu().numpy()
-    if isinstance(icsl_predict, torch.Tensor):
-        icsl_predict = icsl_predict.detach().cpu().numpy()
-    if len(real.shape) == 3:
-        real = real.unsqueeze(0) # (H, W, C) to (1, H, W, C)
-    if len(icsl_predict.shape) == 3:
-        icsl_predict = icsl_predict.unsqueeze(0)
-
-    if len(real.shape) == 5:
-        real = real.squeeze(0) # (B, T, C, H, W) to (T, C, H, W)
-    if len(icsl_predict.shape) == 5:
-        icsl_predict = icsl_predict.squeeze(0)
-    N = icsl_predict.shape[0]
-    assert real.shape == icsl_predict.shape, f"Shape mismatch: {real.shape} vs {icsl_predict.shape}"
-    assert len(real.shape) == 4 and real.shape[1] == 3, f"Invalid shape: {real.shape}, expected (T, C, H, W)"
-    for i in range(N):
-        real_frames = real[i]
-        icsl_frames = icsl_predict[i]
-        # rotete the real_frames and icsl_frames by 90 degrees counterclockwise
-        real_frames = np.transpose(real_frames, (2, 1, 0)) # (C, H, W) to (H, W, C)
-        icsl_frames = np.transpose(icsl_frames, (2, 1, 0)) # (C, H, W) to (H, W, C)
-        rotated_real_frames = np.rot90(real_frames, 2, axes=(0, 1)) # (H, W, C) to (W, H, C)
-        rotated_icsl_frames = np.rot90(icsl_frames, 2, axes=(0, 1)) # (H, W, C) to (W, H, C)
-        # (H, W, C) 
-        concatenated_img = np.vstack((rotated_real_frames, rotated_icsl_frames))
-        img = np.clip(concatenated_img, 0, 255).astype(np.uint8)
-        ARimage = np.clip(img, 0, 255).astype(np.uint8)
-        # concatenate the ARimage and ARreal up and down
-        if frame_count == 0:
-            whole_ARimage = ARimage
+    print(state_dict_path)
+    state_dict = torch.load(state_dict_path, weights_only=False)
+    if("metadict_models" in state_dict):
+        state_dict = state_dict["metadict_models"]
+    # state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        if k.startswith("module."):
+            new_state_dict[k[7:]] = v
         else:
-            whole_ARimage = np.hstack((whole_ARimage, ARimage))
-        frame_count += 1
-    # use Image to save the image to PNG
-    img = Image.fromarray(whole_ARimage)
-    img.save(os.path.join(save_path))
-    print("Save the image to " + save_path)
-
+            print(f"Key {k} does not start with 'module.'")
+            new_state_dict[k] = v
+    
+    return new_state_dict        
+    # msg = model.load_state_dict(new_state_dict, strict=False)
+    # logger.info("Pretrained weights loaded with msg: {}".format(msg))
+    # return model

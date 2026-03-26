@@ -93,7 +93,7 @@ def dist_generator(rank, use_gpu, world_size, config, main_rank,
                 black_list = config.load_model_parameter_blacklist
             else:
                 black_list = []
-            models[model_idx] = custom_load_model(models[model_idx], f'{config.load_model_path}/model.pth', 
+            models[model_idx], _ = custom_load_model(models[model_idx], config.load_model_path, 
                                     black_list=black_list,
                                     verbose=main, 
                                     strict_check=False)

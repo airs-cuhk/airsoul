@@ -2,6 +2,9 @@
 run_name: YOUR_NAME_TO_RUN
 master_port: "12402"
 load_model_path: [Path or None]
+reset_metainfo:
+  epochs: 0
+monitor_dir: ./runs/monitor/
 
 log_config:
   use_tensorboard: True
@@ -174,6 +177,7 @@ train_config:
 
     data_path: [PATH]
     save_model_path: "./checkpoints"
+    save_optimizer: False
     max_save_iterations: 3999
 
     lossweight_policymodel: 0.01

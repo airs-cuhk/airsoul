@@ -5,12 +5,15 @@ from torch.nn import functional as F
 from .recursion import PRNN, SimpleLSTM
 from .block_wrapper import MultiBlocks
 from .transformers import ARTransformerEncoder
-from .mamba import MambaBlock
+# from .mamba import MambaBlock
 from .blockrec_wrapper import BlockRecurrentWrapper
 from .gsa import GLABlock, GSABlock
 from .rwkv6 import RWKV6Layer
 from .rwkv7 import RWKV7Layer
 from .deltanet import GatedDeltaNet
+from .kda import KDALayer
+# from .mamba2 import Mamba2Layer
+# from .sparse_attention import NSATransformerEncoder
 
 class CausalBlock(nn.Module):
     """
@@ -34,6 +37,14 @@ class CausalBlock(nn.Module):
                 dim_feedforward=config.inner_hidden_size, 
                 dropout=config.dropout, 
                 context_window=config.context_window
+            )
+        elif(self.model_type == "nsa"):
+            main_encoder = NSATransformerEncoder(
+                config.num_layers, 
+                config.hidden_size, 
+                config.nhead, 
+                dim_feedforward=config.inner_hidden_size, 
+                dropout=config.dropout, 
             )
         elif(self.model_type == "gsa"):
             main_encoder = MultiBlocks(
@@ -73,6 +84,20 @@ class CausalBlock(nn.Module):
                 max_position_encoding=config.position_encoding_size,
                 expand=config.expand,    # Block expansion factor
             )
+        elif(self.model_type == "mamba2"):
+            use_segment_input = config.use_segment_input
+            if not config.use_blockrecurrence:
+                use_segment_input = False
+            main_encoder = MultiBlocks(
+                Mamba2Layer,
+                config.num_layers,
+                need_block_wrapper=False,
+                io_size=config.hidden_size,
+                expand=config.inner_hidden_size/config.hidden_size,
+                num_heads=config.nhead,
+                use_segment_input=use_segment_input,
+                num_hidden_layers=config.num_layers,
+            )
         elif(self.model_type == "rwkv6"):
             main_encoder = MultiBlocks(
                 RWKV6Layer,
@@ -103,8 +128,17 @@ class CausalBlock(nn.Module):
                 io_size=config.hidden_size,
                 intermediate_size=config.inner_hidden_size,
                 num_heads=config.nhead,
-                expend_v = config.expend_v
-            )           
+                expand_v=config.expand_v
+            )
+        elif(self.model_type == "kda"):
+            main_encoder = MultiBlocks(
+                KDALayer,
+                config.num_layers,
+                need_block_wrapper=False,
+                io_size=config.hidden_size,
+                num_heads=config.nhead,
+                expand_v=config.expand_v,
+            )                 
         else:
             raise Exception("No such causal model: %s" % config.model_type)
         
@@ -139,6 +173,9 @@ class CausalBlock(nn.Module):
         kwargs["checkpoints_density"] = self.checkpoints_density
         out, cache = self.layers.forward(*args, **kwargs)
         return self.layer_norm(out), cache
+    
+    def get_mem(self):
+        return self.layers.get_mem()
     
     def reset(self):
         if(self.need_reset):

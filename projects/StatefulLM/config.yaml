@@ -1,0 +1,89 @@
+---
+run_name: 02-06-train-Statefull-t5_c5_train_6b
+master_port: "12403"
+load_model_path: None
+
+
+log_config:
+  use_tensorboard: True
+  tensorboard_log: ./runs/02-06-train-Statefull-t5_c5_train_6b
+  training_log: ./runs/02-06-train-Statefull-t5_c5_train_6b/train.log
+  evaluation_log: ./runs/02-06-train-Statefull-t5_c5_train_6b/eval.log
+
+model_config:
+  word_embeddings:
+      model_type: MLP
+      input_type: Discrete
+      input_size: 32128
+      hidden_size: 1024
+      dropout: 0.0
+  causal_block:
+    model_type: RWKV7
+    num_layers: 40
+    hidden_size: 1024
+    inner_hidden_size: 1024
+    num_hidden_layers: 48
+    dropout: 0.10
+    nhead: 64
+    hidden_ratio: 2
+    position_encoding_size: 12000
+    use_layer_norm: True
+    use_blockrecurrence: True
+    checkpoints_density: -1
+    memory_length: 0
+    memory_type: MEM
+    is_frozen: False
+    is_generate: False
+    gate_bound: 22
+    gate_bound_type: 0
+
+
+  output_layers:
+      model_type: MLP
+      output_type: Discrete
+      input_size: 1024
+      hidden_size: 32128
+      layer_norm: True
+      residual_connect: False
+      dropout: 0.0
+
+train_config:
+  batch_size: 4
+  # file_size: 500
+  manual_sync: True
+  seq_len: 10000
+  seg_len: 2000
+  max_epochs: 20
+
+  max_save_iterations: 200
+  
+  stateful_training: True
+
+  use_amp: False
+  use_bf16: True
+  use_scaler: false
+
+  lr: 1.0e-4
+  lr_decay_interval: 5000
+  lr_T_max: 76
+  lr_max: 1.0e-4
+  lr_min: 0.0
+  lr_warmup_step: 30
+  data_path: [/goosefsx/91mst04h/airs/zsj/yuxuan/Faithfull/processed_data/t5_c5_train_6b_10k*10_npy]
+  # /goosefsx/91mst04h/airs/zsj/yuxuan/Faithfull/processed_data/t5_c5_train_6b_1000k*1_npy
+  # /goosefsx/91mst04h/airs/zsj/yuxuan/Faithfull/processed_data/t5_c5_train_6b_npy
+  save_model_path: ./checkpoints/02-06-train-Statefull-t5_c5_train_6b
+
+
+test_config:
+  datasets:
+    - name: unseen
+      batch_size: 1
+      # file_size: 500
+
+      seq_len: 1000000
+      seg_len: 2000
+
+      data_path: [/goosefsx/91mst04h/airs/zsj/yuxuan/Faithfull/processed_data/t5_c5_val_npy]
+      output: ./runs/02-06-train-Statefull-t5_c5_train_6b/log.txt
+      log_dir: ./runs/02-06-train-Statefull-t5_c5_train_6b

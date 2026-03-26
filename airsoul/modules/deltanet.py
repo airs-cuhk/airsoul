@@ -10,7 +10,7 @@ class GatedDeltaNet(nn.Module):
                 io_size: int=512,
                 intermediate_size: int=1024,
                 num_heads: int=4,
-                expend_v: int=2,
+                expand_v: int=2,
                 layer_idx: int=0,
                 is_generate: bool=False):
         super().__init__()
@@ -24,8 +24,9 @@ class GatedDeltaNet(nn.Module):
                                           hidden_size = io_size,
                                           intermediate_size = intermediate_size,
                                           num_heads = num_heads,
+                                          head_dim = int(0.75*io_size//num_heads),
                                           vocab_size = 32000,
-                                          expand_v = expend_v, # default 2
+                                          expand_v = expand_v, # default 2
                                           conv_size = 4)
         self.encoder = GatedDeltaNetBlock(config=self.config, 
                                           layer_idx=0) # manage cache outside the fla lib
