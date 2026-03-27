@@ -21,6 +21,15 @@ def focal_loss(out, gt, gamma=0):
     preds = torch.log(out + 1.0e-10) * ((1.0 - out) ** gamma)
     return -torch.sum(preds * gt_logits, dim=-1)
 
+def kl_loss(out, gt, eps: float = 1e-8):
+    out_probs = out / out.sum(dim=-1, keepdim=True)
+    label_probs = gt / (gt.sum(dim=-1, keepdim=True) + eps)
+    log_out = torch.log(out_probs + eps)
+    kl_div = F.kl_div(log_out, label_probs, reduction='none')
+    loss = kl_div.sum(dim=-1)
+    return loss
+
+
 def metrics(out, gt=None, loss_type='mse', **kwargs):
     if(loss_type == 'mse'):
         assert gt is not None, "Ground Truth Must Be Provided When Using MSE Loss"
@@ -39,6 +48,9 @@ def metrics(out, gt=None, loss_type='mse', **kwargs):
     elif(loss_type == 'fid'):
         assert gt is not None, "Ground Truth Must Be Provided When Using PSNR Loss"
         return calculate_fid(out, gt)
+    elif(loss_type == 'kl'):
+        assert gt is not None, "Ground Truth Must Be Provided When Using KL Loss"
+        return kl_loss(out, gt)
     else:
         raise ValueError('Unknown loss type {}'.format(loss_type))
     return loss_array
