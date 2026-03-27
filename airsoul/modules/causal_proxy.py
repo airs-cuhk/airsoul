@@ -116,7 +116,8 @@ class CausalBlock(nn.Module):
                 need_block_wrapper=False,
                 io_size=config.hidden_size,
                 intermediate_size=config.inner_hidden_size,
-                num_heads=config.nhead
+                num_heads=config.nhead,
+                is_generate=is_generate
             )
         elif(self.model_type == "deltanet"):
             main_encoder = MultiBlocks(

@@ -11,11 +11,19 @@ class RWKV7Layer(nn.Module):
                 io_size: int=512,
                 intermediate_size: int = 1024,
                 num_heads: int = 4,
-                layer_idx: int = 0):
+                layer_idx: int = 0,
+                is_generate: bool = False):
         super().__init__()
+        head_dim = int(io_size // num_heads)
+        if(not is_generate):
+            mode = 'chunk'
+        else:
+            mode = 'fused_recurrent'
         self.config = RWKV7Config(
+                  attn_mode=mode,
                   hidden_size=io_size,
                   intermediate_size=intermediate_size,
+                  head_dim=head_dim,
                   num_heads=num_heads)
         self.layer_idx = layer_idx
         if layer_idx == 0:
