@@ -170,6 +170,7 @@ def custom_save_model(model, save_model_path,
         name = 'default'
     else:
         name = meta_info[name_key]
+    os.makedirs(save_model_path, exist_ok=True)
     torch.save(data, save_model_path + f"/ckpt_{name}{appendix}.pth")
 
 def custom_load_model(model,
@@ -201,6 +202,22 @@ def custom_load_model(model,
                 metainfo[toks[1]][toks[2]] = saved_metainfo[key]
     else:
         saved_state_dict = saved_metainfo
+
+    # Automatically adapt to DDP and non-DDP weights
+    has_ddp_prefix = False
+    for key in list(saved_state_dict.keys()):
+        if key.startswith('module.'):
+            has_ddp_prefix = True
+            break
+    
+    if has_ddp_prefix and not isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        # If the weights are in DDP format but the current model is not DDP, remove the prefix
+        new_state_dict = {}
+        for key, value in saved_state_dict.items():
+            new_key = key.replace('module.', '', 1)
+            new_state_dict[new_key] = value
+        saved_state_dict = new_state_dict
+        log_warn("Removed 'module.' prefix from state_dict keys for non-DDP model", on=verbose)
 
     matched_state_dict = {} 
 
