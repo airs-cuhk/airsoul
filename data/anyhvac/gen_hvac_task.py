@@ -4,6 +4,7 @@ import random
 import pickle 
 import queue
 import time
+import torch
 import multiprocessing
 from pathlib import Path
 from tqdm import tqdm
@@ -11,6 +12,11 @@ from xenoverse.anyhvac.anyhvac_env import HVACEnvDiscreteAction, HVACEnvDiffActi
 from xenoverse.anyhvac.anyhvac_sampler import HVACTaskSampler
 from xenoverse.anyhvac.anyhvac_solver import HVACSolverGTPID
 
+def has_nan(obs_dict):
+        for key, value in obs_dict.items():
+            if isinstance(value, np.ndarray) and np.isnan(value).any():
+                return True
+        return False
 
 def validate_env_with_pid(env, task, max_steps=20000):
     """
@@ -19,7 +25,8 @@ def validate_env_with_pid(env, task, max_steps=20000):
     Return:
         bool: pass/fail
     """
-    env.set_task(task)
+    torch.set_num_threads(1)
+    env.set_task(task, generate_task=True)
     n_sensors = len(env.sensors)
     n_coolers = len(env.coolers)
 
@@ -28,42 +35,50 @@ def validate_env_with_pid(env, task, max_steps=20000):
     terminated, truncated = False, False
     step_count = 0
     
-    while (not terminated) and (not truncated) and (step_count < max_steps):
+    while (not terminated) and (step_count < max_steps):
         action = 1 - agent.policy(obs["sensor_readings"])[n_coolers:]
         
         obs, reward, terminated, truncated, info = env.step(action)
         step_count += 1
+        if has_nan(obs):
+            print(f"✗ NaN detected in obs at step {step_count}")
+            return False
 
         if step_count % 1000 == 0:
             print(f"PID test progress: {100*step_count/max_steps} %")
     
-    success = (step_count >= max_steps and not terminated and not truncated)
+    success = (step_count >= max_steps and not terminated)
     print(f"{'✓ PID test pass' if success else '✗ PID test fail'} (Total {step_count} steps.)")
     return success
 
-def validate_env_with_max(env, task, max_steps=20000):
+def validate_env_with_sample_action(env, task, max_steps=20000, mode="max"):
     """
     Verify whether the environment can run to max_steps with Max power policy.
     
     Return:
         bool: pass/fail
     """
-    env.set_task(task)
+    torch.set_num_threads(1)
+    env.set_task(task, generate_task=True)
     obs, info = env.reset()
     terminated, truncated = False, False
     step_count = 0
     
-    while (not terminated) and (not truncated) and (step_count < max_steps):
-        action = env.sample_action(mode="max")
+    while (not terminated) and (step_count < max_steps):
+        action = env.sample_action(mode=mode)
         
         obs, reward, terminated, truncated, info = env.step(action)
         step_count += 1
 
+        if has_nan(obs):
+            print(f"✗ NaN detected in obs at step {step_count}")
+            return False
+
         if step_count % 1000 == 0:
-            print(f"Max power test progress: {100*step_count/max_steps} %")
+            print(f"{mode} test progress: {100*step_count/max_steps} %")
     
-    success = (step_count >= max_steps and not terminated and not truncated)
-    print(f"{'✓ Max power test pass' if success else '✗ Max power test fail'} (Total {step_count} steps.)")
+    success = (step_count >= max_steps and not terminated)
+    print(f"{'✓ Max power test pass' if success else '✗ sample action test fail'} (Total {step_count} steps.)")
     return success
 
 def sample_env_with_validation(
@@ -71,6 +86,7 @@ def sample_env_with_validation(
     max_steps=20000,
     num_valid_envs=5,
     use_diff_action=True,
+    mode="max",
     verbose=True      
 ):
     save_dir = Path(save_path)
@@ -88,10 +104,10 @@ def sample_env_with_validation(
             env = HVACEnvDiffAction(verbose=verbose)
         else:
             env = HVACEnvDiscreteAction(verbose=verbose)
-        pid_pass = validate_env_with_pid(env, task, max_steps)
-        max_power_pass = validate_env_with_max(env, task, max_steps)
+        # pid_pass = validate_env_with_pid(env, task, max_steps)
+        max_power_pass = validate_env_with_sample_action(env, task, max_steps, mode)
 
-        if pid_pass and max_power_pass:
+        if max_power_pass: #pid_pass: 
             valid_count += 1
             with open(current_config_path, "wb") as f:
                 pickle.dump(task, f)
@@ -104,6 +120,7 @@ def sample_env_with_validation_parallel(
     max_steps=20000,
     num_valid_envs=5,
     use_diff_action=True,
+    mode="max",
     verbose=True,
     max_workers=None
 ):
@@ -124,6 +141,9 @@ def sample_env_with_validation_parallel(
     # 创建保存目录
     save_dir = Path(save_path)
     save_dir.mkdir(parents=True, exist_ok=True)
+
+    if mode == "constant_conservative":
+        use_diff_action = False
     
     # 设置并行工作进程数
     if max_workers is None:
@@ -132,6 +152,7 @@ def sample_env_with_validation_parallel(
     print(f"Starting HVAC environment sampling with {max_workers} workers")
     print(f"Target: {num_valid_envs} valid environments")
     print(f"Using {'differential' if use_diff_action else 'discrete'} action environment")
+    print(f"Using {'max power' if mode == 'max' else 'constant_conservative temperature'} policy")
     
     # 创建管理器
     manager = multiprocessing.Manager()
@@ -159,7 +180,7 @@ def sample_env_with_validation_parallel(
         p = multiprocessing.Process(
             target=worker_process,
             args=(task_queue, result_queue, save_dir, max_steps, 
-                use_diff_action, verbose, next_task_id, valid_count, lock)  # 添加lock参数
+                use_diff_action, mode, verbose, next_task_id, valid_count, lock)  # 添加lock参数
         )
         p.daemon = True
         p.start()
@@ -213,7 +234,7 @@ def sample_env_with_validation_parallel(
 
 def worker_process(
     task_queue, result_queue, save_dir, max_steps, 
-    use_diff_action, verbose, next_task_id, valid_count, lock
+    use_diff_action, mode, verbose, next_task_id, valid_count, lock
 ):
     """工作进程：持续尝试生成有效环境，直到任务队列为空"""
     pid = os.getpid()
@@ -245,10 +266,10 @@ def worker_process(
                 env = HVACEnvDiscreteAction(verbose=verbose)
             
             # 验证环境
-            pid_pass = validate_env_with_pid(env, task, max_steps)
-            # max_power_pass = validate_env_with_max(env, task, max_steps)
+            # pid_pass = validate_env_with_pid(env, task, max_steps)
+            max_power_pass = validate_env_with_sample_action(env, task, max_steps, mode)
             
-            if pid_pass: #and max_power_pass:
+            if max_power_pass: 
                 # 保存有效配置
                 task_config_path = save_dir / f"hvac_task_{task_id}.pkl"
                 with open(task_config_path, "wb") as f:
@@ -303,6 +324,8 @@ if __name__ == "__main__":
                         help='Number of valid environments to sample')
     parser.add_argument('--use_diff_action', type=lambda x: (str(x).lower() in ['true', '1', 'yes']), 
                         default=False, help='Use differential action environment (true/false)')
+    parser.add_argument('--mode', type=str, default="max", choices=["max", "constant_conservative"],
+                        help='Policy mode (max/constant_conservative)')
     parser.add_argument('--verbose', type=lambda x: (str(x).lower() in ['true', '1', 'yes']), 
                         default=False, help='Enable verbose output (true/false)')
     parser.add_argument('--workers', type=int, default=None,
@@ -317,6 +340,7 @@ if __name__ == "__main__":
         max_steps=args.max_steps,
         num_valid_envs=args.num_envs,
         use_diff_action=args.use_diff_action,
+        mode=args.mode,
         verbose=args.verbose,
         max_workers=args.workers
     )

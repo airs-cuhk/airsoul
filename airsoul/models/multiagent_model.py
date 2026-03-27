@@ -18,8 +18,6 @@ class MultiAgentModel(nn.Module):
 
         self.word_emb = MLPEncoder(config.word_embeddings)
 
-        # TODO, in config, input size of word_emb = vocab_size + 1. Last one is padding value.
-
         self.nvocab = config.vocab_size
         
         self.causal_model = CausalBlock(config.causal_block)
@@ -54,7 +52,7 @@ class OmniRL_MultiAgent(MultiAgentModel):
         idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env -> 4 words
         (If reward is included, idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env, idx_reward -> 5 words)
         p prompt_value -> p words
-        value of obs, action, and reward ~ [-16, 16], resolution 0.1 -> 320 words + 2 upper and lower words = 322 words
+        value of obs, action, and reward ~ [-16, 16], temperature_resolution 0.1 -> 320 words + 2 upper and lower words = 322 words
         off_action_id -> 1 word
         idx_padding -> 1 word
         Then the total vocabular size = m + n + p + 333
@@ -78,25 +76,29 @@ class OmniRL_MultiAgent(MultiAgentModel):
     """
     def __init__(self, config, verbose=False): 
         super().__init__(config)
-
-        loss_weight = torch.cat((
-                torch.linspace(0.0, 1.0, config.context_warmup),
-                torch.full((config.max_position_loss_weighting - config.context_warmup,), 1.0)), dim=0)
-        loss_weight = loss_weight / torch.sum(loss_weight)
-        self.register_buffer('loss_weight', loss_weight)
+        self.config = config
+        if config.use_context_warmup:
+            loss_weight = torch.cat((
+                    torch.linspace(0.0, 1.0, config.context_warmup),
+                    torch.full((config.max_position_loss_weighting - config.context_warmup,), 1.0)), dim=0)
+            loss_weight = loss_weight / torch.sum(loss_weight)
+            self.register_buffer('loss_weight', loss_weight)
 
         self.nobs = config.nobs
         self.nagent = config.nagent
         self.nprompt = config.nprompt
-        self.value_num = config.value_num
+        self.temperature_value_num = config.temperature_value_num
+        self.temperature_resolution = config.temperature_resolution
+        self.policy_value_num = config.policy_value_num
+        self.policy_resolution = config.policy_resolution
         self.include_reward = config.include_reward
 
         # 4=idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env; include reward -> 4 + 1 = 5
         # 2=value blow botom bound and value above upper bound; 2=off_action_id, idx_padding
         if self.include_reward:
-            vocab_size = self.nobs + self.nagent + 5 + self.nprompt + self.value_num + 2 + 2
+            vocab_size = self.nobs + self.nagent + 5 + self.nprompt + (self.temperature_value_num + 3) + (self.policy_value_num + 1) + 2
         else:
-            vocab_size = self.nobs + self.nagent + 4 + self.nprompt + self.value_num + 2 + 2
+            vocab_size = self.nobs + self.nagent + 4 + self.nprompt + (self.temperature_value_num + 3) + (self.policy_value_num + 1) + 2
         if not (config.word_embeddings.input_size == config.vocab_size == vocab_size):
             log_fatal(f"Word embeddings input size {config.word_embeddings.input_size} should be equal to vocab size {config.vocab_size} and {vocab_size}")
 
@@ -126,8 +128,9 @@ class OmniRL_MultiAgent(MultiAgentModel):
                 'idx_reward': 4
             }
         self.PROMPT_BASE = self.SPECIAL_TOKENS_OFFSET + len(self.SPECIAL_TOKENS)
-        self.VALUE_BASE = self.PROMPT_BASE + self.nprompt
-        self.ACTION_OFF_BASE = self.VALUE_BASE + self.value_num + 2
+        self.TEMPERATURE_VALUE_BASE = self.PROMPT_BASE + self.nprompt
+        self.POLICY_VALUE_BASE = self.TEMPERATURE_VALUE_BASE + self.temperature_value_num + 3 # Include lower and upper value
+        self.ACTION_OFF_BASE = self.POLICY_VALUE_BASE + self.policy_value_num + 1
 
     def find_position(self, inputs):
         """
@@ -147,14 +150,101 @@ class OmniRL_MultiAgent(MultiAgentModel):
 
         return world_model_obs_mask, world_model_action_mask, policy_mask
 
-    def sequential_loss(self, inputs, label_actions, use_loss_weight=True, update_memory=True, reduce_dim=1):
+    def check_kl_loss_alignment(self, outputs, label_actions, loss_weight_policy, debug=False):
+        """
+        检查 KL loss 计算时，loss_wht 和 label_actions 的位置是否对齐
+        
+        参数:
+            outputs: 模型输出 [batch_size, seq_len, vocab_size]
+            label_actions: label action 分布 [batch_size, seq_len, action_dim]
+            loss_weight_policy: policy 位置的权重掩码 [batch_size, seq_len]
+            debug: 是否打印详细调试信息
+        """
+        if not debug:
+            return
+        
+        print("\n" + "="*80)
+        print("检查 KL Loss 位置对齐")
+        print("="*80)
+        
+        # 1. 打印 shapes
+        print(f"outputs shape: {outputs.shape}")
+        print(f"label_actions shape: {label_actions.shape}")
+        print(f"loss_weight_policy shape: {loss_weight_policy.shape}")
+        
+        batch_size, seq_len = loss_weight_policy.shape
+        
+        # 2. 获取 loss_weight_policy 不为 0 的位置
+        policy_positions = (loss_weight_policy != 0)
+        policy_indices = torch.nonzero(policy_positions, as_tuple=False)
+        
+        print(f"\nloss_weight_policy 不为 0 的位置:")
+        print(f"  - 总共有 {policy_indices.shape[0]} 个位置")
+        if policy_indices.shape[0] > 0:
+            print(f"  - 前 5 个位置: {policy_indices[:5].tolist()}")
+        
+        # 3. 获取 label_actions prob 和不为零的位置
+        # label_actions 是概率分布，shape: [batch_size, seq_len, action_dim]
+        # 检查哪些位置的概率和 > 0（说明有有效的分布）
+        prob_sums = label_actions.sum(dim=-1)  # [batch_size, seq_len]
+        valid_prob_positions = (prob_sums > 0)
+        valid_prob_indices = torch.nonzero(valid_prob_positions, as_tuple=False)
+        
+        print(f"\nlabel_actions 概率和不为零的位置:")
+        print(f"  - 总共有 {valid_prob_indices.shape[0]} 个位置")
+        if valid_prob_indices.shape[0] > 0:
+            print(f"  - 前 5 个位置: {valid_prob_indices[:5].tolist()}")
+        
+        # 4. 检查对齐情况
+        # 找出在 policy_positions 中但不在 valid_prob_positions 中的位置
+        mismatch_positions = policy_positions & ~valid_prob_positions
+        mismatch_indices = torch.nonzero(mismatch_positions, as_tuple=False)
+        
+        print(f"\n对齐检查结果:")
+        print(f"  - policy_positions 中的位置数: {policy_indices.shape[0]}")
+        print(f"  - valid_prob_positions 中的位置数: {valid_prob_indices.shape[0]}")
+        print(f"  - 不匹配的位置数: {mismatch_indices.shape[0]}")
+        
+        if mismatch_indices.shape[0] > 0:
+            print(f"  ⚠️  警告: 发现 {mismatch_indices.shape[0]} 个不匹配的位置！")
+            print(f"  这些位置在 loss_weight_policy 中不为 0，但 label_actions 的概率和为 0:")
+            print(f"  前 10 个不匹配位置: {mismatch_indices[:10].tolist()}")
+            
+            # 打印一些不匹配的详细信息
+            for i in range(min(3, mismatch_indices.shape[0])):
+                b, s = mismatch_indices[i].tolist()
+                print(f"    位置 (batch={b}, seq={s}):")
+                print(f"      loss_weight_policy = {loss_weight_policy[b, s].item()}")
+                print(f"      label_actions prob sum = {prob_sums[b, s].item()}")
+                print(f"      label_actions values = {label_actions[b, s, :5].tolist()}...")  # 只显示前5个值
+        else:
+            print(f"  ✅ 所有位置对齐正确！")
+        
+        # 5. 详细分析：检查 batch 维度上的分布
+        print(f"\nBatch 维度分析:")
+        for b in range(min(3, batch_size)):
+            policy_cnt = policy_positions[b].sum().item()
+            valid_cnt = valid_prob_positions[b].sum().item()
+            mismatch_cnt = mismatch_positions[b].sum().item()
+            print(f"  Batch {b}: policy_positions={policy_cnt}, valid_prob_positions={valid_cnt}, mismatch={mismatch_cnt}")
+        
+        print("="*80 + "\n")
+        
+        return mismatch_indices.shape[0] == 0  # 返回是否对齐
+
+
+    def sequential_loss(self, inputs, label_actions, use_loss_weight=True, update_memory=True, use_kl=False, reduce_dim=1):
         """
         label_actions should have same shape as inputs, and replace the idx_a_self with label action.
         """
         seq_len = inputs.shape[1]
         ps = self.causal_model.position
         pe = ps + seq_len - 1
-        if(self.loss_weight.shape[0] < pe):
+        
+        if not self.config.use_context_warmup:
+            use_loss_weight = False
+
+        if(use_loss_weight and (self.loss_weight.shape[0] < pe)):
             log_fatal(f"Loss weight (shape {self.loss_weight.shape[0]}) should be longer" +
                     f" than sequence length {pe}")
 
@@ -191,12 +281,21 @@ class OmniRL_MultiAgent(MultiAgentModel):
                                           loss_wht=loss_weight_wm_action,
                                           reduce_dim=reduce_dim,
                                           need_cnt=True)
-        loss["policy"], loss["count_p"] = weighted_loss(outputs,
+        if use_kl:
+            self.check_kl_loss_alignment(outputs, label_actions[:,:-1], loss_weight_policy, debug=True)
+            loss["policy"], loss["count_p"] = weighted_loss(outputs,
                                        gt=label_actions[:,:-1],
-                                       loss_type="ce",
+                                       loss_type="kl",
                                        loss_wht=loss_weight_policy,
                                        reduce_dim=reduce_dim,
                                        need_cnt=True)
+        else:
+            loss["policy"], loss["count_p"] = weighted_loss(outputs,
+                                        gt=label_actions[:,:-1],
+                                        loss_type="ce",
+                                        loss_wht=loss_weight_policy,
+                                        reduce_dim=reduce_dim,
+                                        need_cnt=True)
         if self.include_reward:
             loss["reward"] = weighted_loss(outputs,
                                         gt=inputs[:, 1:],
@@ -213,7 +312,7 @@ class OmniRL_MultiAgent(MultiAgentModel):
         loss["causal-l2"] = parameters_regularization(self)
         return loss
         
-    def generate(self, inputs, need_numpy=True, single_batch=True, reward_prediction=False):
+    def generate(self, inputs, need_numpy=True, single_batch=True, reward_prediction=False, Temp=1.0):
         """
         0, inputs : tensor with shape [BT, NT], 
             if agents have different seq lenth, padding with value self.nvocab: 
@@ -237,38 +336,79 @@ class OmniRL_MultiAgent(MultiAgentModel):
         else:
             inputs = inputs.to(device)
         BT = inputs.size(0)
-        outputs, _ = self.forward(inputs, need_cache=False, update_memory=False)
+        outputs, _ = self.forward(inputs, need_cache=False, update_memory=False, T=Temp)
         
-        def get_value(output): 
-            output = F.softmax(output, dim=-1)  # [B, NT, D]
+        def sample_value(mask, output_in, deterministic, B, NT, D):
+            output = output_in.clone()
+            masked_output = output * mask
+            row_sums = masked_output.sum(dim=1, keepdim=True)
+            zero_rows = (row_sums.squeeze(1) == 0)
+            if zero_rows.any():
+                uniform_value = 1.0 / mask.sum(dim=1, keepdim=True)
+                valid_mask = mask & (uniform_value > 0)
+                masked_output[zero_rows] = uniform_value[zero_rows] * valid_mask[zero_rows].float()
+                row_sums = masked_output.sum(dim=1, keepdim=True)
+                
+            normalized_output = masked_output / row_sums
+            if deterministic:
+                samples = torch.argmax(normalized_output, dim=1, keepdim=True)
+            else:
+                samples = torch.multinomial(normalized_output, num_samples=1)  # [B*NT, 1]
+            output = samples.view(B, NT)  # [B, NT]
+            return output
+        
+        def get_value(output, deterministic=False, 
+                      policy_mask=None,
+                      wm_obs_mask=None,
+                      wm_action_mask=None): 
+            origin_output = output.clone()
             B, NT, D = output.shape
             output = output.view(-1, D)  # [B*NT, D]
 
-            mask = torch.zeros_like(output, dtype=torch.bool)
-            # TODO diff action resolution is 0.5, value range is ..., change mask
-            start_idx = self.VALUE_BASE
-            end_idx = self.VALUE_BASE + self.value_num + 2 # upper and lower value take two tokens
-            mask[:, start_idx:end_idx] = True
-            masked_output = output * mask
+            mask_policy = torch.zeros_like(output, dtype=torch.bool)
+            mask_wm_obs = torch.zeros_like(output, dtype=torch.bool)
+            mask_wm_action = torch.zeros_like(output, dtype=torch.bool)
+            start_idx_policy = self.POLICY_VALUE_BASE
+            end_idx_policy = self.ACTION_OFF_BASE 
+            start_idx_temp = self.TEMPERATURE_VALUE_BASE
+            end_idx_temp = self.POLICY_VALUE_BASE
 
-            row_sums = masked_output.sum(dim=1, keepdim=True)
-            zero_mask = (row_sums == 0)
-            if zero_mask.any():
-                uniform_value = 1.0 / D
-                zero_indices = zero_mask.squeeze().nonzero(as_tuple=True)[0]
-                masked_output[zero_indices] = uniform_value
-                masked_output[zero_indices] *= mask
-                row_sums = masked_output.sum(dim=1, keepdim=True)
+            mask_policy[:, start_idx_policy:end_idx_policy] = True
+            mask_wm_obs[:, start_idx_temp:end_idx_temp] = True
+            mask_wm_action[:, start_idx_temp:end_idx_temp] = True
+            mask_wm_action[:, self.ACTION_OFF_BASE] = True
+            
+            # [B, NT]
+            output_policy = sample_value(mask_policy, output, deterministic, B, NT, D)
+            output_wm_obs = sample_value(mask_wm_obs, output, deterministic, B, NT, D)
+            output_wm_action = sample_value(mask_wm_action, output, deterministic, B, NT, D)
+
+            output_result = torch.zeros_like(output_policy)
+            output_result[policy_mask] = output_policy[policy_mask]
+            output_result[wm_obs_mask] = output_wm_obs[wm_obs_mask]
+            output_result[wm_action_mask] = output_wm_action[wm_action_mask]
+            
+
+            if policy_mask is not None:
+                if policy_mask.shape != (B, NT):
+                    raise ValueError(f"policy_mask shape {policy_mask.shape} does not match output shape {B, NT}")
+                value_range_probs = (origin_output * mask_policy.view(B, NT, D)).sum(dim=-1)  # [B, NT]
+                policy_probs = value_range_probs[policy_mask] # [num_policy_positions]
+                policy_value_prob_avg = policy_probs.mean().item()
+                print(f"policy_value_prob_avg: {policy_value_prob_avg}")
                 
-
-            normalized_output = masked_output / row_sums
-            samples = torch.multinomial(normalized_output, num_samples=1)  # [B*NT, 1]
-            output = samples.view(B, NT)  # [B, NT]
-
-            return output
+            return output_result
         
-        outputs = get_value(outputs)
-        world_model_obs_mask, world_model_action_mask, policy_mask, _ = self.find_position(inputs)
+        
+        if self.include_reward:
+            world_model_obs_mask, world_model_action_mask, policy_mask, reward_mask = self.find_position(inputs)
+        else:
+            world_model_obs_mask, world_model_action_mask, policy_mask= self.find_position(inputs)
+        
+        outputs = get_value(outputs, deterministic=False, 
+                            policy_mask=policy_mask,
+                            wm_obs_mask=world_model_obs_mask,
+                            wm_action_mask=world_model_action_mask)
         world_model_obs = []
         world_model_action = []
         action = []
@@ -299,7 +439,7 @@ class OmniRL_MultiAgent(MultiAgentModel):
                 new_inputs[i, pos+1:pos+3] = new_value[i]
                 if pos < inputs.size(1) -1:
                     new_inputs[i, pos+3:] = inputs[i, pos+1:]
-            outputs, _ = self.forward(new_inputs, need_cache=False, update_memory=False)
+            outputs, _ = self.forward(new_inputs, need_cache=False, update_memory=False, T=Temp)
             outputs = get_value(outputs)
             _, _, _, reward_mask = self.find_position(new_inputs)
             world_model_reward = []
@@ -310,7 +450,7 @@ class OmniRL_MultiAgent(MultiAgentModel):
             return world_model_obs, world_model_action, action, world_model_reward
 
 
-    def incontext_learn(self, inputs, need_cache = False):
+    def incontext_learn(self, inputs, cache=None, need_cache = False):
         """
         inputs : tensor with shape [1, NT], only support 1 batch for now: 
             [ idx_o1, o1, idx_o3, o3, idx_o4, o4, ..., 
@@ -323,7 +463,7 @@ class OmniRL_MultiAgent(MultiAgentModel):
         else:
             inputs = inputs.to(device)
 
-        _, cache = self.forward(inputs, need_cache=need_cache, update_memory=True)
+        _, cache = self.forward(inputs, cache=cache, need_cache=need_cache, update_memory=True)
         if need_cache:
             return cache                       
 

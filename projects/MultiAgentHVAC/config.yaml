@@ -11,29 +11,31 @@ log_config:
 
 model_config:
   context_warmup: 512
-  action_dim: 236
+  action_dim: 366
   max_position_loss_weighting: 128000
   policy_loss_type: CrossEntropy
 
-  vocab_size: 352 
+  vocab_size: 366 
   nobs: 10
   nagent: 10
   nprompt: 4
-  value_num: 320
-  resolution: 0.1
+  temperature_value_num: 320
+  temperature_resolution: 0.1
+  policy_value_num: 12
+  policy_resolution: 0.5
   include_reward: False
 
   word_embeddings:
       model_type: MLP
       input_type: Discrete
-      input_size: 236
+      input_size: 366
       hidden_size: 1024
       dropout: 0.0
   output_layers:
       model_type: MLP
       output_type: Discrete
       input_size: 1024
-      hidden_size: 236
+      hidden_size: 366
       layer_norm: True
       residual_connect: False
       dropout: 0.0
@@ -101,6 +103,7 @@ model_config:
       memory_type: MEM
       memory_length: 0
       is_frozen: False
+      is_generate: False
 
   causal_block_bak_5:
       model_type: DELTANET
@@ -194,11 +197,11 @@ generator_config:
     downsample_trail: 30
     decoding_strategy:
         T_ini: 1.0
-        T_fin: 0.1
-        T_step: 10000
+        T_fin: 0.5
+        T_step: 5000
         decay_type: Linear
-    max_trails: 1000 
-    max_steps: 200
+    max_trails: 1 
+    max_steps: 20000
     max_total_steps: 0
     learn_from_data: False
     data_root: [Path]
@@ -207,7 +210,9 @@ generator_config:
         max_obs_num: 10
         max_agent_num: 10
         prompt_num: 4
-        value_num: 320
-        resolution: 0.1
-        vocab_size: 352
+        temperature_value_num: 320
+        temperature_resolution: 0.1
+        policy_value_num: 12
+        policy_resolution: 0.5
+        vocab_size: 366
     default_prompt: 1

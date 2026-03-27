@@ -7,7 +7,9 @@ python multiagent_dataset.py \
     --max_obs_num 10 \
     --max_agent_num 10 \
     --prompt_num 4 \
-    --value_num 320 \
-    --resolution 0.1 \
-    --vocab_size 352 \
+    --temperature_value_num 320 \
+    --temperature_resolution 0.1 \
+    --policy_value_num 12 \
+    --policy_resolution 0.5 \
+    --vocab_size 366 \
     --num_workers 1

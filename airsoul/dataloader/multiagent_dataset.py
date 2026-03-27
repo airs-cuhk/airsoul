@@ -69,6 +69,66 @@ class MultiAgentLoadDateSet(Dataset):
 
         # Orders: Seqnence and Action Label
         return seq_arr, lact_arr
+    
+class MultiAgentDistributionLoadDateSet(Dataset):
+    def __init__(self, directory, time_step, verbose=False):
+        if(verbose):
+            print("\nInitializing data set from file: %s..." % directory)
+        self.file_list = []
+        directories = []
+        if(isinstance(directory, list)):
+            directories.extend(directory)
+        else:
+            directories.append(directory)
+        for d in directories:
+            file_list = os.listdir(d)
+            self.file_list.extend([os.path.join(d, file) for file in file_list])
+            
+        self.time_step = time_step
+
+        if(verbose):
+            print("...finished initializing data set, number of samples: %s\n" % len(self.file_list))
+
+    def __len__(self):
+        return len(self.file_list)
+
+    def _load_and_process_data(self, path):
+        try:
+            sequence = np.load(path + '/sequence.npy')
+            label_action_distribution = np.load(path + '/label_action_distribution.npy')
+
+            max_t = min(sequence.shape[0], 
+                        label_action_distribution.shape[0])
+
+            # Shape Check
+            if(self.time_step > max_t):
+                print(f'[Warning] Load samples from {path} that is shorter ({max_t}) than specified time step ({self.time_step})')
+                n_b = 0
+                n_e = max_t
+            else:
+                n_b = 0
+                n_e = self.time_step
+
+            return (sequence[n_b:n_e], 
+                    label_action_distribution[n_b:n_e])
+        except Exception as e:
+            print(f"Unexpected reading error founded when loading {path}: {e}")
+            return (None,) * 2
+        
+    def __getitem__(self, index):
+        path = self.file_list[index]
+
+        data = self._load_and_process_data(path)
+        
+        if any(arr is None for arr in data):
+            return None
+
+        seq_arr = torch.from_numpy(data[0].astype("int32")).long() 
+        lact_arr = torch.from_numpy(data[1].astype("float32")).float()
+
+        # Orders: Seqnence and Label Action Distribution
+        return seq_arr, lact_arr
+
 
 class MultiAgentDataSet(Dataset):
     """
@@ -76,12 +136,13 @@ class MultiAgentDataSet(Dataset):
     - i.e., we have m obs_id, n agent_id -> m + n words
         idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env -> 4 words
         (If reward is included, idx_prompt, idx_a_self, idx_end_timestep, idx_reset_env, idx_reward -> 5 words)
-        p prompt_value -> p words (p=3)
-        value of obs, action, and reward ~ [-16, 16], resolution 0.1, upper and lower -> 322 words 
+        p prompt_value -> p words (p=4) [0,1,2,unknown]
+        value of temperature for obs sensor and agent action ~ [-16, 16], temperature_resolution 0.1, upper and lower -> 323 words
+        value of policy action ~ [-3, 3], resolution 0.5 -> 13 words
+        (value of reward ... )
         off_action_id -> 1 word
         idx_padding -> 1 word
-        Then the total vocabular size = m + n + p + 4 + 322 + 1 + 1
-        (If reward is included, Then the total vocabular size = m + n + p + 334)
+        Then the total vocabular size = m + n + p + 4 + 323 + 13 + 1 + 1
         
     - For one timestep the sequence is arranged as: 
         [ idx_o1, o1, idx_o3, o3, idx_o4, o4, ..., 
@@ -101,7 +162,18 @@ class MultiAgentDataSet(Dataset):
     - The data is save as observations_*.npy, actions_behavior_*.npy, actions_behavior_*.npy, prompts_*.npy, rewards.npy
         The sequential data is constructed base on two connection matrix above as each time steps, and each agent can form a sequence.
     """
-    def __init__(self, directory, time_step, max_obs_num, max_agent_num, prompt_num, value_num, resolution, vocab_size, verbose=False):
+    def __init__(self, 
+                 directory, 
+                 time_step, 
+                 max_obs_num, 
+                 max_agent_num, 
+                 prompt_num, 
+                 temperature_value_num, 
+                 temperature_resolution,
+                 policy_value_num,
+                 policy_resolution,
+                 vocab_size, 
+                 verbose=False):
         if(verbose):
             print("\nInitializing data set from file: %s..." % directory)
         self.file_list = []
@@ -118,11 +190,16 @@ class MultiAgentDataSet(Dataset):
         self.max_obs_num = max_obs_num
         self.max_agent_num = max_agent_num
         self.prompt_num = prompt_num
-        self.resolution = resolution
+        self.temperature_value_num = temperature_value_num
+        self.temperature_resolution = temperature_resolution
+        self.policy_value_num = policy_value_num
+        self.policy_resolution = policy_resolution
         self.vocab_size = vocab_size
-        self.min_value = - resolution * value_num / 2
-        self.max_value = - self.min_value
-        self.value_num = value_num
+        self.temperature_min_value = - temperature_resolution * temperature_value_num / 2
+        self.temperature_max_value = - self.temperature_min_value
+        self.policy_min_value = - policy_resolution * policy_value_num / 2
+        self.policy_max_value = - self.policy_min_value
+        
 
         self.include_reward = False
 
@@ -156,9 +233,43 @@ class MultiAgentDataSet(Dataset):
                 'idx_reset_env': 3
             }
         self.PROMPT_BASE = self.SPECIAL_TOKENS_OFFSET + len(self.SPECIAL_TOKENS)
-        self.VALUE_BASE = self.PROMPT_BASE + self.prompt_num
-        self.ACTION_OFF_BASE = self.VALUE_BASE + self.value_num + 2 # 2: lower and upper value
+        self.TEMPERATURE_VALUE_BASE = self.PROMPT_BASE + self.prompt_num
+        self.POLICY_VALUE_BASE = self.TEMPERATURE_VALUE_BASE + self.temperature_value_num + 3 # Include lower and upper value
+        self.ACTION_OFF_BASE = self.POLICY_VALUE_BASE + self.policy_value_num + 1 # Include 0, total discrete action num is policy_value_num + 1
+        self.PADDING_IDX = self.vocab_size - 1
 
+    def _validate_policy_value(self, value):
+        discrete_values = np.arange(
+            self.policy_min_value,
+            self.policy_max_value + self.policy_resolution/2,
+            self.policy_resolution
+        )
+        valid_mask = np.isclose(
+            value[:, None], 
+            discrete_values,
+            atol=1e-5,
+            rtol=1e-5
+        ).any(axis=1)
+        invalid_indices = np.where(~valid_mask)[0]
+        if len(invalid_indices) > 0:
+            error_info = []
+            for idx in invalid_indices[:5]:
+                actual = value[idx]
+                closest_idx = np.abs(discrete_values - actual).argmin()
+                closest_val = discrete_values[closest_idx]
+                error_info.append(
+                    f"idx {idx}: value {actual:.4f} invalid, "
+                    f"Closest valid value: {closest_val:.4f}"
+                )
+            error_msg = (
+                f"Fine {len(invalid_indices)} invalid values\n"
+                f"Valid range:: [{self.policy_min_value:.4f}, {self.policy_max_value:.4f}]\n"
+                f"Resolution: {self.policy_resolution:.4f}\n"
+                f"Error msg:\n" + "\n".join(error_info)
+            )
+            raise ValueError(error_msg)
+        return True
+    
     def vocabularize(self, type, value, behavior_value=None,value_previous=None,use_diff_action=False):
         handler = getattr(self, f'_handle_{type}', None)
         if handler:
@@ -194,7 +305,8 @@ class MultiAgentDataSet(Dataset):
 
             result = np.zeros_like(raw_values, dtype=np.int64)
             on_mask = flags > 0.5
-            off_mask = ~on_mask
+            padding_mask = flags < -0.5
+            off_mask = ~on_mask & ~padding_mask
             if np.any(on_mask):
                 on_values = raw_values[on_mask]
                 if use_diff_action:
@@ -219,44 +331,78 @@ class MultiAgentDataSet(Dataset):
                         diff_values[:,1:] = raw_values[:, 1:] - raw_values_behavior[:, :-1]
                         diff_values[behavior_previous_off] = raw_values[behavior_previous_off]
                         on_values = diff_values[on_mask]
-
-                below_min = on_values < self.min_value
-                above_max = on_values > self.max_value
-                in_range = ~(below_min | above_max)
-                temp_result = np.zeros_like(on_values, dtype=np.int64)
-                if np.any(below_min):
-                    temp_result[below_min] = self.VALUE_BASE
-                if np.any(above_max):
-                    temp_result[above_max] = self.VALUE_BASE + self.value_num + 1
-                if np.any(in_range):
-                    clipped = np.clip(on_values[in_range], self.min_value, self.max_value)
-                    quantized = np.round((clipped - self.min_value) / self.resolution).astype(np.int64)
-                    temp_result[in_range] = self.VALUE_BASE + quantized + 1
-                result[on_mask] = temp_result
+                    
+                    temp_result = np.zeros_like(on_values, dtype=np.int64)
+                    self._validate_policy_value(on_values)
+                    quantized = np.round((on_values - self.policy_min_value) / self.policy_resolution).astype(np.int64)
+                    temp_result = self.POLICY_VALUE_BASE + quantized
+                    result[on_mask] = temp_result
+                else:
+                    below_min = on_values < self.temperature_min_value
+                    above_max = on_values > self.temperature_max_value
+                    in_range = ~(below_min | above_max)
+                    temp_result = np.zeros_like(on_values, dtype=np.int64)
+                    if np.any(below_min):
+                        temp_result[below_min] = self.TEMPERATURE_VALUE_BASE
+                    if np.any(above_max):
+                        temp_result[above_max] = self.TEMPERATURE_VALUE_BASE + self.temperature_value_num + 2
+                    if np.any(in_range):
+                        clipped = np.clip(on_values[in_range], self.temperature_min_value, self.temperature_max_value)
+                        quantized = np.round((clipped - self.temperature_min_value) / self.temperature_resolution).astype(np.int64)
+                        temp_result[in_range] = self.TEMPERATURE_VALUE_BASE + quantized + 1
+                    result[on_mask] = temp_result
 
             if np.any(off_mask):
                 result[off_mask] = self.ACTION_OFF_BASE
+
+            if np.any(padding_mask):
+                result[padding_mask] = self.PADDING_IDX
             
             return result.item() if scalar_input else result
         elif value.shape[2] == 1:
             raw_values = value
             result = np.zeros_like(raw_values, dtype=np.int64)
-            below_min = raw_values < self.min_value
-            above_max = raw_values > self.max_value
+            below_min = raw_values < self.temperature_min_value
+            above_max = raw_values > self.temperature_max_value
             in_range = ~(below_min | above_max)
             if np.any(below_min):
-                result[below_min] = self.VALUE_BASE
+                result[below_min] = self.TEMPERATURE_VALUE_BASE
             if np.any(above_max):
-                result[above_max] = self.VALUE_BASE + self.value_num + 1
+                result[above_max] = self.TEMPERATURE_VALUE_BASE + self.temperature_value_num + 2
             if np.any(in_range):
-                clipped = np.clip(raw_values[in_range], self.min_value, self.max_value)
-                quantized = np.round((clipped - self.min_value) / self.resolution).astype(np.int64)
-                result[in_range] = self.VALUE_BASE + quantized + 1
+                clipped = np.clip(raw_values[in_range], self.temperature_min_value, self.temperature_max_value)
+                quantized = np.round((clipped - self.temperature_min_value) / self.temperature_resolution).astype(np.int64)
+                result[in_range] = self.TEMPERATURE_VALUE_BASE + quantized + 1
             return result.item() if scalar_input else result
 
-    def _handle_action_vocab(self, vocab, value_previous=None, use_diff_action=True):
+    def _handle_policy_action(self, value, use_diff_action=False):
+        if value.shape[2] == 2:
+            raw_values = value[:, :, 0:1] 
+            flags = value[:, :, 1:2] 
+
+            result = np.zeros_like(raw_values, dtype=np.int64)
+            on_mask = flags > 0.5
+            padding_mask = flags < -0.5
+            off_mask = ~on_mask & ~padding_mask
+            if np.any(on_mask):
+                on_values = raw_values[on_mask]
+                temp_result = np.zeros_like(on_values, dtype=np.int64)
+                self._validate_policy_value(on_values)
+                quantized = np.round((on_values - self.policy_min_value) / self.policy_resolution).astype(np.int64)
+                temp_result = self.POLICY_VALUE_BASE + quantized
+                result[on_mask] = temp_result
+            if np.any(off_mask):
+                result[off_mask] = self.ACTION_OFF_BASE
+            if np.any(padding_mask):
+                result[padding_mask] = self.PADDING_IDX
+            return result
+        else:
+            raise ValueError("Invalid shape: {}".format(value.shape))
+            
+    
+    def _handle_action_vocab(self, vocab, use_diff_action=False):
         # vocab: [num_of_agent, 1, 1]
-        # value_previous: [num_of_agent, 1, 2]
+        # result: [num_of_agent, 1, 2]
         if not hasattr(vocab, 'shape'):
             vocab = np.array(vocab)
         num_agents, timesteps = vocab.shape[:2]
@@ -264,29 +410,10 @@ class MultiAgentDataSet(Dataset):
         off_mask = (vocab == self.ACTION_OFF_BASE)
         on_mask = ~ off_mask
         result[off_mask] = [0.0,0.0]
-        
-        vocab_on = vocab[on_mask]
-        below_min_mask = (vocab_on == self.VALUE_BASE)
-        above_max_mask = (vocab_on == self.VALUE_BASE + self.value_num + 1)
-        in_range_mask = ~(below_min_mask | above_max_mask)
-        combined_mask_above = on_mask.copy()
-        combined_mask_below = on_mask.copy()
-        combined_mask_on_value = on_mask.copy()
-        combined_mask_above[on_mask] = above_max_mask
-        combined_mask_below[on_mask] = below_min_mask
-        combined_mask_on_value[on_mask] = in_range_mask
-        result[combined_mask_above] = [1.0, self.min_value]
-        result[combined_mask_below] = [1.0, self.max_value]
-        if np.any(in_range_mask):
-            
-            quantized_index = vocab_on[in_range_mask] - self.VALUE_BASE - 1
-            restored_values = self.min_value + quantized_index * self.resolution
-            result[combined_mask_on_value] = np.column_stack([np.ones_like(restored_values), restored_values])
-        
-        if use_diff_action and value_previous is not None:
-            on_mask_previous = (value_previous[:, :, 1] > 0.5)
-            both_on_mask = on_mask_previous & on_mask
-            result[both_on_mask, 1] = result[both_on_mask, 1] + value_previous[both_on_mask, 1]
+
+        quantized_index = vocab[on_mask] - self.POLICY_VALUE_BASE
+        restored_values = self.policy_min_value + quantized_index * self.policy_resolution
+        result[on_mask] = np.column_stack([np.ones_like(restored_values), restored_values])
 
         return result
 
@@ -359,8 +486,7 @@ class MultiAgentDataSet(Dataset):
                         f"Agent {agent_id} poilicy position count ({np.sum(policy_position_mask)}) "
                         f"not equal to label length ({len(label_vocabularize)})"
                     )
-                pad_token = self.vocab_size - 1 
-                label_action_array = np.full(agent_sequence.shape, pad_token, dtype=np.int64)
+                label_action_array = np.full(agent_sequence.shape, self.PADDING_IDX, dtype=np.int64)
                 label_action_array[policy_position_mask] = label_vocabularize  
 
                 sequence_list.append((agent_sequence, label_action_array))      
@@ -371,8 +497,33 @@ class MultiAgentDataSet(Dataset):
             return (None,) * 6
         
 class MultiAgentDataSetVetorized(MultiAgentDataSet):
-    def __init__(self, directory, time_step, max_obs_num, max_agent_num, prompt_num, value_num, resolution, vocab_size, verbose=False):
-        super().__init__(directory, time_step, max_obs_num, max_agent_num, prompt_num, value_num, resolution, vocab_size, verbose)
+    def __init__(self, 
+                 directory, 
+                 time_step, 
+                 max_obs_num, 
+                 max_agent_num, 
+                 prompt_num, 
+                 temperature_value_num, 
+                 temperature_resolution,
+                 policy_value_num,
+                 policy_resolution, 
+                 vocab_size, 
+                 use_policy_action=True,
+                 use_action_mask=True,
+                 verbose=False):
+        super().__init__(directory, 
+                         time_step, 
+                         max_obs_num, 
+                         max_agent_num, 
+                         prompt_num, 
+                         temperature_value_num, 
+                         temperature_resolution,
+                         policy_value_num,
+                         policy_resolution,  
+                         vocab_size, 
+                         verbose)
+        self.use_policy_action = use_policy_action
+        self.use_action_mask = use_action_mask
 
     def _handle_obs_id(self, value, use_diff_action=False):
         return value.astype(np.int64) if isinstance(value, np.ndarray) else int(value)
@@ -400,11 +551,50 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
         
         return merged    
 
+    def _generate_action_mask(self, self_action):
+        # self_action: (1, timesteps, 2)
+        # action_mask: (1, timesteps)
+        timesteps = self_action.shape[1]
+        action_mask = np.ones((1, timesteps), dtype=np.float32)
+        sample_mask_ratio = np.random.uniform(low=0.0, high=1.0)
+        if sample_mask_ratio > 0.5:
+            partially_mask_ratio =  np.random.uniform(low=0.0, high=0.5)
+            num_masked_steps = int(partially_mask_ratio * timesteps)
+            if num_masked_steps > 0:
+                masked_indices = np.random.choice(
+                    timesteps, 
+                    size=num_masked_steps, 
+                    replace=False
+                )
+                action_mask[0, masked_indices] = 0
+        elif sample_mask_ratio > 0.3:
+            action_mask[0, :] = 0
+        else:
+            pass # no mask
+        return action_mask
+    
+    def _mask_action_data(self, action_data, action_mask):
+        # action_data: (1, timesteps, 2)
+        # action_mask: (1, timesteps)
+        # masked_action_data: (1, timesteps, 2)
+        masked_action_data = action_data.copy()
+        expanded_mask = action_mask[..., np.newaxis]
+        replacement = np.stack([
+            action_data[..., 0],
+            np.where(action_mask == 0, -1, action_data[..., 1]) 
+        ], axis=-1) 
+        masked_action_data = np.where(expanded_mask == 1, action_data, replacement)
+        return masked_action_data
+
     def _load_and_process_data(self, path, use_relative_idx=True):
         try:
             observations = np.load(path + '/diff_observations.npy')
             actions_behavior = np.load(path + '/diff_actions_behavior.npy')
             actions_label = np.load(path + '/diff_actions_label.npy')
+            actions_behavior_policy = np.load(path + '/actions_behavior_policy.npy')
+            actions_label_policy = np.load(path + '/actions_label_policy.npy')
+            label_action_distribution = np.load(path + '/label_action_distribution.npy')
+            
             prompts = np.load(path + '/prompts.npy')
             rewards = np.load(path + '/rewards.npy')
             resets = np.load(path + '/resets.npy')
@@ -419,8 +609,9 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
             num_agents = actions_behavior.shape[0]
 
             # Convert to a numpy array and unify the dimensions
-            observations = np.stack(observations, axis=0)       # (num_obs, total_timesteps)
-            actions_behavior = np.stack(actions_behavior, axis=0) # (num_agents, total_timesteps)
+            observations = np.stack(observations, axis=0)       # (num_obs, total_timesteps, 1)
+            actions_behavior = np.stack(actions_behavior, axis=0) # (num_agents, total_timesteps, 2)
+            actions_behavior_policy = np.stack(actions_behavior_policy, axis=0) # (num_agents, total_timesteps, 2)
             
 
             # Shape Check
@@ -476,6 +667,10 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
                 relevant_agents = agent_mask # (num_relative_agents)
                 # Self last action
                 self_last_action = np.expand_dims(actions_behavior[agent_id][time_slice_last_action], axis=0) # (1, timesteps)
+                # create self action mask, mask out self action in self_last_action and agent_data_vocabularize
+                if self.use_action_mask:
+                    action_mask = self._generate_action_mask(self_last_action)
+                    self_last_action = self._mask_action_data(self_last_action, action_mask)
                 agent_data = np.concatenate([self_last_action, agent_data], axis=0) # (1 + num_relative_agents, timesteps)
                 relevant_agents = np.insert(relevant_agents, 0, agent_id) # (1 + num_relative_agents)
 
@@ -501,8 +696,16 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
                 idx_end_timestep_vocabularize = np.where(resets.reshape(-1, 1), idx_reset_vocabularize, idx_end_timestep_vocabularize)
                 prompts_vocabularize = self.vocabularize('prompt_value', prompts[time_slice]).squeeze()
                 prompts_vocabularize = prompts_vocabularize[:, np.newaxis]
-                agent_data_vocabularize = self.vocabularize('value', actions_behavior[agent_id][time_slice_current_action,:][np.newaxis, :],
-                                                            use_diff_action=True).squeeze()
+                if self.use_policy_action:
+                    policy_action = actions_behavior_policy[agent_id][time_slice_current_action,:][np.newaxis, :]
+                    if self.use_action_mask:
+                        policy_action = self._mask_action_data(policy_action, action_mask)
+                    agent_data_vocabularize = self.vocabularize('policy_action', policy_action).squeeze()
+                else:
+                    policy_action = actions_behavior[agent_id][time_slice_current_action,:][np.newaxis, :]
+                    if self.use_action_mask:
+                        policy_action = self._mask_action_data(policy_action, action_mask)
+                    agent_data_vocabularize = self.vocabularize('value', policy_action, use_diff_action=True).squeeze()
                 agent_data_vocabularize = agent_data_vocabularize[:, np.newaxis]
                 if self.include_reward:
                     idx_reward_vocabularize = self.vocabularize('special_token', 'idx_reward')
@@ -523,24 +726,34 @@ class MultiAgentDataSetVetorized(MultiAgentDataSet):
                 agent_seq = agent_seq.reshape(-1) # (timesteps * (num_relative_obs * 2 + num_relative_agents * 2 + 5or7))
                 
                 policy_position_mask = (agent_seq == self.vocabularize('special_token', 'idx_a_self'))
-                label_vocabularize = self.vocabularize('value', actions_label[agent_id][time_slice_current_action][np.newaxis, :],
-                                                       behavior_value = actions_behavior[agent_id][time_slice_current_action,:][np.newaxis, :],
-                                                       use_diff_action=True).squeeze()
+                if self.use_policy_action:
+                    label_vocabularize = self.vocabularize('policy_action', actions_label_policy[agent_id][time_slice_current_action][np.newaxis, :]).squeeze()
+                else:
+                    label_vocabularize = self.vocabularize('value', actions_label[agent_id][time_slice_current_action][np.newaxis, :],
+                                                        behavior_value = actions_behavior[agent_id][time_slice_current_action,:][np.newaxis, :],
+                                                        use_diff_action=True).squeeze()
                 if np.sum(policy_position_mask) != len(label_vocabularize):
                     raise ValueError(
                         f"Agent {agent_id} poilicy position count ({np.sum(policy_position_mask)}) "
                         f"not equal to label length ({len(label_vocabularize)})"
                     )
-                pad_token = self.vocab_size - 1
-                label_action_array = np.full(agent_seq.shape, pad_token, dtype=np.int64)
+                label_action_array = np.full(agent_seq.shape, self.PADDING_IDX, dtype=np.int64)
                 label_action_array[policy_position_mask] = label_vocabularize
+
+                discrete_action_dim = label_action_distribution.shape[2]
+                label_action_distribution_array = np.full(
+                    (agent_seq.shape[0], discrete_action_dim), 
+                    0.0, 
+                    dtype=np.float32
+                )
+                label_action_distribution_array[policy_position_mask] = label_action_distribution[agent_id][time_slice_last_action]
                 
-                sequence_list.append((agent_seq, label_action_array))
+                sequence_list.append((agent_seq, label_action_array, label_action_distribution_array))
 
             return sequence_list
         except Exception as e:
             print(f"Unexpected reading error founded when loading {path}: {e}")
-            return (None,) * 6
+            return (None,) * 3
 
 def process_subdir(args):
     """
@@ -553,8 +766,10 @@ def process_subdir(args):
     max_obs_num = params['max_obs_num']
     max_agent_num = params['max_agent_num']
     prompt_num = params['prompt_num']
-    value_num = params['value_num']
-    resolution = params['resolution']
+    temperature_value_num = params['temperature_value_num']
+    temperature_resolution = params['temperature_resolution']
+    policy_value_num = params['policy_value_num']
+    policy_resolution = params['policy_resolution']
     vocab_size = params['vocab_size']
     
     try:
@@ -565,8 +780,10 @@ def process_subdir(args):
             max_obs_num=max_obs_num,
             max_agent_num=max_agent_num,
             prompt_num=prompt_num,
-            value_num=value_num,
-            resolution=resolution,
+            temperature_value_num=temperature_value_num,
+            temperature_resolution=temperature_resolution,
+            policy_value_num=policy_value_num,
+            policy_resolution=policy_resolution,
             vocab_size=vocab_size,
             verbose=False
         )
@@ -580,13 +797,14 @@ def process_subdir(args):
             record_ids = list(range(current_counter, current_counter + len(results)))
             counter.value += len(results)
         
-        for i, (sequence, label_action) in enumerate(results):
+        for i, (sequence, label_action, label_action_distribution) in enumerate(results):
             record_name = f"record_{record_ids[i]:06d}"
             record_path = os.path.join(save_dir, record_name)
             os.makedirs(record_path, exist_ok=True)
             
             np.save(os.path.join(record_path, "sequence.npy"), sequence)
             np.save(os.path.join(record_path, "label_action.npy"), label_action)
+            np.save(os.path.join(record_path, "label_action_distribution.npy"), label_action_distribution)
             
             # Save origin data (optional)
             # src_files = glob.glob(os.path.join(sub_path, "*"))
@@ -602,7 +820,18 @@ def process_subdir(args):
         print(f"Error processing {sub_dir}: {str(e)}")
         return 0
 
-def main(load_dir, save_dir, time_step, max_obs_num, max_agent_num, prompt_num, value_num, resolution, vocab_size, num_workers=None):
+def main(load_dir, 
+         save_dir, 
+         time_step, 
+         max_obs_num, 
+         max_agent_num, 
+         prompt_num, 
+         temperature_value_num, 
+         temperature_resolution, 
+         policy_value_num, 
+         policy_resolution,
+         vocab_size, 
+         num_workers=None):
     os.makedirs(save_dir, exist_ok=True)
     
     sub_dirs = [d for d in os.listdir(load_dir) 
@@ -615,8 +844,10 @@ def main(load_dir, save_dir, time_step, max_obs_num, max_agent_num, prompt_num, 
         'max_obs_num': max_obs_num,
         'max_agent_num': max_agent_num,
         'prompt_num': prompt_num,
-        'value_num': value_num,
-        'resolution': resolution,
+        'temperature_value_num': temperature_value_num,
+        'temperature_resolution': temperature_resolution,
+        'policy_value_num': policy_value_num,
+        'policy_resolution': policy_resolution,
         'vocab_size': vocab_size
     }
     
@@ -676,9 +907,13 @@ if __name__ == "__main__":
                         help="Maximum agents parameter")
     parser.add_argument("--prompt_num", type=int, required=True,
                         help="Maximum prompts parameter")
-    parser.add_argument("--value_num", type=int, required=True,
+    parser.add_argument("--temperature_value_num", type=int, required=True,
                         help="Value number parameter")
-    parser.add_argument("--resolution", type=float, required=True,
+    parser.add_argument("--temperature_resolution", type=float, required=True,
+                        help="Resolution parameter")
+    parser.add_argument("--policy_value_num", type=int, required=True,
+                        help="Value number parameter")
+    parser.add_argument("--policy_resolution", type=float, required=True,
                         help="Resolution parameter")
     parser.add_argument("--vocab_size", type=int, required=True,
                         help="Vocab size")
@@ -693,8 +928,10 @@ if __name__ == "__main__":
         args.max_obs_num,
         args.max_agent_num,
         args.prompt_num,
-        args.value_num,
-        args.resolution,
+        args.temperature_value_num,
+        args.temperature_resolution,
+        args.policy_value_num,
+        args.policy_resolution,
         args.vocab_size,
         num_workers=args.num_workers
     )
@@ -712,18 +949,21 @@ if __name__ == "__main__":
     #     max_obs_num=args.max_obs_num,
     #     max_agent_num=args.max_agent_num,
     #     prompt_num=args.prompt_num,
-    #     value_num=args.value_num,
-    #     resolution=args.resolution,
+    #     temperature_value_num=args.temperature_value_num,
+    #     temperature_resolution=args.temperature_resolution,
+    #     policy_value_num=args.policy_value_num,
+    #     policy_resolution=args.policy_resolution,
     #     vocab_size=args.vocab_size,
     #     verbose=True
     # )
     # sub_path = os.path.join(args.load_dir, sub_dirs[0])
     # results = dataset._load_and_process_data(sub_path)
-    # for i, (sequence, label_action) in enumerate(results):
+    # for i, (sequence, label_action, label_action_distribution) in enumerate(results):
     #         record_name = f"record_000000"
     #         record_path = os.path.join(args.save_dir, record_name)
     #         os.makedirs(record_path, exist_ok=True)
             
     #         np.save(os.path.join(record_path, "sequence.npy"), sequence)
     #         np.save(os.path.join(record_path, "label_action.npy"), label_action)
+    #         np.save(os.path.join(record_path, "label_action_distribution.npy"), label_action_distribution)
 
