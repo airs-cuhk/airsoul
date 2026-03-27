@@ -23,8 +23,6 @@ class GeneratorBase(object):
         self.max_trails = self.config.max_trails
         self.max_total_steps = self.config.max_total_steps
 
-        self.agent_num = self.config.agent_num
-
         self.dT_linear = (self.T_fin - self.T_ini) / self.T_step
         self.dT_exp = numpy.exp((numpy.log(self.T_fin) - numpy.log(self.T_ini)) / self.T_step)
 

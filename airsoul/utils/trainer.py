@@ -181,7 +181,8 @@ def EpochManager(cls):
 
             for batch_id, batch_data in enumerate(self.dataloader):
                 # Important: Must reset the model before segment iteration
-                self.model.module.reset()
+                if self.config.reset_memory:
+                    self.model.module.reset()
                 if(self.is_training):
                     self.model.train()
                     self.optimizer.zero_grad()
@@ -234,7 +235,8 @@ def EpochManager(cls):
 
                 yield need_break, done
 
-            self.training_metainfo["epochs"] += 1
+            if self.is_training:
+                self.training_metainfo["epochs"] += 1                
             
             # Save At Training Epoch End
             if(self.main and self.is_training):
@@ -246,6 +248,7 @@ def EpochManager(cls):
             else:
                 done = False
 
+            self.model.module.reset() # Reset the model after an epoch or evaluation.
             yield True, done
 
     return WrapperEpochManager
