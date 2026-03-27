@@ -35,6 +35,9 @@ class StatefulLM(nn.Module):
     def get_mem(self):
         return self.causal_model.get_mem()
     
+    def set_mem(self, mem, position=None):
+        self.causal_model.set_mem(mem, position=position)
+
     def reset(self):
         self.causal_model.reset()
 

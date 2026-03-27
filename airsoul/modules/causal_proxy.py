@@ -177,6 +177,9 @@ class CausalBlock(nn.Module):
     def get_mem(self):
         return self.layers.get_mem()
     
+    def set_mem(self, mem, position=None):
+        return self.layers.set_mem(mem, position=position)
+
     def reset(self):
         if(self.need_reset):
             self.layers.reset()

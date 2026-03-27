@@ -92,7 +92,7 @@ class LMEpoch:
         
         # if(self.is_training):
         #     # save cache
-        #     cache2save = self.model.module.get_mem()
+        #     cache2save, position = self.model.module.get_mem()
         #     numpy_cache = cache2numpy(cache2save)
         #     assert cache2save is not None
         #     cache_folder = "/goosefsx/91mst04h/airs/qxg/czy/airsoul_dev/03-03-memory_cache_statefull_long"

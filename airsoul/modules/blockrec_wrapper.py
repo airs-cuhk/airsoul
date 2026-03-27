@@ -112,4 +112,9 @@ class BlockRecurrentWrapper(nn.Module):
         return output, new_cache
     
     def get_mem(self):
-        return self.memory
+        return memory_cpy(self.memory), self.position
+
+    def set_mem(self, memory, position=None):
+        self.memory = memory
+        if position is not None:
+            self.position = position
