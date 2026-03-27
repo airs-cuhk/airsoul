@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch.amp import autocast, GradScaler
 from airsoul.dataloader.prefetch_dataloader import PrefetchDataLoader
 from .tools import Configure, Logger, log_progress, log_debug, log_warn, log_fatal, log_sum_parameters_grad
-from .tools import create_folder, check_model_validity, model_path, count_parameters, safety_check, apply_gradient_safely, custom_load_model, custom_save_model
+from .tools import create_folder, check_model_validity, model_path, count_parameters, safety_check, apply_gradient_safely, custom_load_model, custom_save_model, memory_cpy
 from .scheduler import noam_scheduler, cosine_function_scheduler
 import time
 import datetime
@@ -238,6 +238,14 @@ def EpochManager(cls):
             else:
                 done = False
 
+            # Backup memory for stateful training before validation.
+            if not self.is_training:
+                if self.stateful_training:
+                    backup_memory, backup_position = self.model.module.get_mem()
+                    self.model.module.reset()
+                else:
+                    self.model.module.reset()
+
             for batch_id, batch_data in enumerate(self.dataloader):
                 acc_iter_log += 1
 
@@ -326,6 +334,10 @@ def EpochManager(cls):
 
             if self.is_training:
                 self.training_metainfo["epochs"] += 1
+            else:
+                # Restore memory after validation
+                if self.stateful_training:
+                    self.model.module.set_mem(backup_memory, backup_position)
             
             # Save At Training Epoch End
             if(self.main and self.is_training):
