@@ -12,7 +12,7 @@ from airsoul.utils import tag_vocabulary, tag_mapping_id, tag_mapping_gamma
 from airsoul.dataloader import AnyMDPDataSet, AnyMDPv2DataSet, AnyMDPDataSetContinuousState, AnyMDPDataSetContinuousStateAction
 
 import gymnasium 
-import gym
+import gymnasium as gym
 import imageio
 import numpy
 import pickle
@@ -176,6 +176,7 @@ class OmniRLEpoch:
 # use gamma_vocabulary and tag_vocabulary
 class OmniRLGenerator(GeneratorBase):
     def preprocess(self):
+        self.agent_num = self.config.agent_num
         self.mult_anymdp_task = False
         if(self.config.env.lower().find("lake") >= 0):
             self.task_sampler = self.task_sampler_lake

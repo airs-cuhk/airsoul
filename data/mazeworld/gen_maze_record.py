@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding=utf8
 # File: dump_maze.py
-import gym
+import gymnasium as gym
 import sys
 import os
 import random

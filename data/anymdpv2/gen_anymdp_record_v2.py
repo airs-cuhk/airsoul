@@ -10,7 +10,7 @@ from stable_baselines3 import SAC, PPO
 from sb3_contrib import RecurrentPPO
 import pickle
 from policy_trainer.noise_distiller import NoiseDistillerWrapper, NoiseDistillerPolicy
-import gym
+import gymnasium as gym
 from policy_trainer.sac_trainer import SACTrainer
 from policy_trainer.ppo_mlp_trainer import PPO_MLP_Trainer
 from policy_trainer.ppo_lstm_trainer import PPO_LSTM_Trainer

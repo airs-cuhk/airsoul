@@ -4,7 +4,7 @@ import sys
 import os
 import torch
 import numpy
-import gym
+import gymnasium as gym
 import l3c.mazeworld
 import cv2
 import pickle

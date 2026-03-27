@@ -10,7 +10,7 @@ from xenoverse.anymdpv2 import AnyMDPv2TaskSampler
 from xenoverse.anymdpv2 import AnyMDPEnv
 from policy_trainer.noise_distiller import NoiseDistillerWrapper, NoiseDistillerPolicy
 from stable_baselines3.common.callbacks import BaseCallback
-import gym
+import gymnasium as gym
 from policy_trainer.sac_trainer import SACTrainer
 from policy_trainer.ppo_mlp_trainer import PPO_MLP_Trainer
 from policy_trainer.ppo_lstm_trainer import PPO_LSTM_Trainer
