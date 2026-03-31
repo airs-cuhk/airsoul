@@ -118,3 +118,63 @@ class BlockRecurrentWrapper(nn.Module):
         self.memory = memory
         if position is not None:
             self.position = position
+
+
+class DualTrackBlockRecurrentWrapper(nn.Module):
+    """
+    DualTrack Block-Recurrent Wrapper: Package the dual-track timing module to manage 
+    the memory of short-term and long-term respectively
+    """
+    
+    def __init__(self, temporal_module, memory_length_short, memory_length_long, 
+                 memory_type='kv'):
+        """
+        Args:
+            temporal_module: DualTrackGatedDeltaNet 
+            memory_length_short: short-term 
+            memory_length_long: long-term 
+            memory_type: 'kv' or 'mem'
+        """
+        super().__init__()
+        
+        self.temporal_module = temporal_module
+        
+        self.wrapper_short = BlockRecurrentWrapper(
+            temporal_module.short_term_encoder, memory_length_short, memory_type)
+        self.wrapper_long = BlockRecurrentWrapper(
+            temporal_module.long_term_encoder, memory_length_long, memory_type)
+
+    def forward(self, src_short, src_long, cache=None, need_cache=False, 
+                checkpoints_density=-1, update_memory=True):
+        
+        # Short-term
+        out_short, new_cache_short = self.wrapper_short(
+            src_short, cache=cache, need_cache=need_cache,
+            checkpoints_density=checkpoints_density, update_memory=update_memory)
+        
+        # Long-term
+        out_long, new_cache_long = self.wrapper_long(
+            src_long, cache=cache, need_cache=need_cache,
+            checkpoints_density=checkpoints_density, update_memory=update_memory)
+        
+        return out_short, out_long, new_cache_short, new_cache_long
+    
+    def get_o_list(self):
+        return self.temporal_module.get_o_list()
+
+    def get_mem(self):
+        mem_short, pos_short = self.wrapper_short.get_mem()
+        mem_long, pos_long = self.wrapper_long.get_mem()
+        return mem_short, pos_short, mem_long, pos_long
+
+    def set_mem(self, mem_short=None, mem_long=None, 
+                pos_short=None, pos_long=None):
+        if mem_short is not None:
+            self.wrapper_short.set_mem(mem_short, pos_short)
+        if mem_long is not None:
+            self.wrapper_long.set_mem(mem_long, pos_long)
+    
+    def reset(self, stateful_reset=True):
+        self.wrapper_short.reset()
+        if not stateful_reset:
+            self.wrapper_long.reset()

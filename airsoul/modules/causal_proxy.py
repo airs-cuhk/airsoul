@@ -6,7 +6,7 @@ from .recursion import PRNN, SimpleLSTM
 from .block_wrapper import MultiBlocks
 from .transformers import ARTransformerEncoder
 # from .mamba import MambaBlock
-from .blockrec_wrapper import BlockRecurrentWrapper
+from .blockrec_wrapper import BlockRecurrentWrapper, DualTrackBlockRecurrentWrapper
 from .gsa import GLABlock, GSABlock
 from .rwkv6 import RWKV6Layer
 from .rwkv7 import RWKV7Layer
@@ -22,7 +22,7 @@ class CausalBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.model_type = config.model_type.lower()
-
+        dual_track = False
         if(config.has_attr("is_generate")):
             is_generate = config.is_generate
         else:
@@ -140,6 +140,7 @@ class CausalBlock(nn.Module):
                 num_heads=config.nhead,
                 expand_v=config.expand_v
             )
+            dual_track = True
         elif(self.model_type == "kda"):
             main_encoder = MultiBlocks(
                 KDALayer,
@@ -154,8 +155,12 @@ class CausalBlock(nn.Module):
         
         self.need_reset = False
         if(config.use_blockrecurrence):
-            main_encoder = BlockRecurrentWrapper(main_encoder, config.memory_length, 
-                    memory_type = config.memory_type)
+            if dual_track:
+                main_encoder = DualTrackBlockRecurrentWrapper(main_encoder, config.memory_length, 
+                        config.memory_length, memory_type = config.memory_type)
+            else:
+                main_encoder = BlockRecurrentWrapper(main_encoder, config.memory_length, 
+                        memory_type = config.memory_type)
             self.need_reset = True
 
         if(config.use_layer_norm):
