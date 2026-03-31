@@ -10,7 +10,7 @@ from .blockrec_wrapper import BlockRecurrentWrapper
 from .gsa import GLABlock, GSABlock
 from .rwkv6 import RWKV6Layer
 from .rwkv7 import RWKV7Layer
-from .deltanet import GatedDeltaNet
+from .deltanet import GatedDeltaNet, DualTrackGatedDeltaNet
 from .kda import KDALayer
 # from .mamba2 import Mamba2Layer
 # from .sparse_attention import NSATransformerEncoder
@@ -122,6 +122,16 @@ class CausalBlock(nn.Module):
             )
         elif(self.model_type == "deltanet"):
             main_encoder = MultiBlocks(
+                DualTrackGatedDeltaNet,
+                config.num_layers,
+                need_block_wrapper=False,
+                io_size=config.hidden_size,
+                intermediate_size=config.inner_hidden_size,
+                num_heads=config.nhead,
+                expand_v=config.expand_v
+            )
+        elif(self.model_type == "dualtrack_gdn"):
+            main_encoder = MultiBlocks(
                 GatedDeltaNet,
                 config.num_layers,
                 need_block_wrapper=False,
@@ -183,3 +193,52 @@ class CausalBlock(nn.Module):
     def reset(self):
         if(self.need_reset):
             self.layers.reset()
+
+class DualTrackCausalBlock(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+
+        hidden_size = config.hidden_size
+        
+        # 融合方式选择
+        self.fusion_type = getattr(config, 'fusion_type', 'gate')  # 'gate', 'scalar', 'mlp', 'add'
+        if self.fusion_type == 'gate':
+            self.fusion_gate = nn.Sequential(
+                nn.Linear(hidden_size * 2, hidden_size),
+                nn.Sigmoid()
+            )
+        elif self.fusion_type == 'scalar':
+            self.fusion_alpha = nn.Parameter(torch.tensor(0.5))
+        elif self.fusion_type == 'mlp':
+            self.fusion_mlp = nn.Sequential(
+                nn.Linear(hidden_size * 2, hidden_size),
+                nn.GELU(),
+                nn.Linear(hidden_size, hidden_size)
+            )
+
+    def forward(self, *args, **kwargs):
+        kwargs["checkpoints_density"] = self.checkpoints_density
+        short_out, long_out, cache_short, cache_long = self.layers.forward(*args, **kwargs)
+
+        if self.fusion_type == 'gate':
+            g = self.fusion_gate(torch.cat([short_out, long_out], dim=-1))
+            out = g * short_out + (1 - g) * long_out
+        elif self.fusion_type == 'scalar':
+            out = self.fusion_alpha * short_out + (1 - self.fusion_alpha) * long_out
+        elif self.fusion_type == 'mlp':
+            out = self.fusion_mlp(torch.cat([short_out, long_out], dim=-1))
+        else:  # 'add'
+            out = short_out + long_out
+
+        return self.layer_norm(out), cache_short, cache_long
+    
+    def get_mem(self):
+        return self.layers.get_mem() # short_mem, long_mem, short_position, long_position
+    
+    def set_mem(self, short_mem, long_mem, short_position=None, long_position=None):
+        return self.layers.set_mem(short_mem, long_mem, 
+                                   short_position=short_position, 
+                                   long_position=long_position)
+    def reset(self, stateful_reset=True):
+        if(self.need_reset):
+            self.layers.reset(stateful_reset=stateful_reset)
