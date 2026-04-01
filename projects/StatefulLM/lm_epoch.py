@@ -103,6 +103,9 @@ class LMEpoch:
         #     np.save(numpy_cache_path, numpy_cache)
         #     pickle.dump(cache2save, open(cache_path, 'wb'))
         
+        if self.dual_track:
+            self.model.module.merge_memory()
+        
         if(self.is_training):
             stat_res = self.stat()
             if(self.logger is not None):

@@ -241,8 +241,11 @@ def EpochManager(cls):
             # Backup memory for stateful training before validation.
             if not self.is_training:
                 if self.stateful_training:
-                    backup_memory, backup_position = self.model.module.get_mem()
-                    self.model.module.reset()
+                    backup_memory_dict_list = self.model.module.get_mem()
+                    if self.dual_truck:
+                        self.model.module.reset(stateful_reset=False)
+                    else:
+                        self.model.module.reset()
                 else:
                     self.model.module.reset()
 
@@ -252,6 +255,9 @@ def EpochManager(cls):
                 # Important: Must not reset the model before segment iteration, when Stateful training
                 if not self.stateful_training:
                     self.model.module.reset()
+                elif self.dual_truck:
+                    self.model.module.reset(stateful_reset=True)
+
                 if(self.is_training):
                     # print("Training mode")
                     self.model.train()
@@ -337,7 +343,7 @@ def EpochManager(cls):
             else:
                 # Restore memory after validation
                 if self.stateful_training:
-                    self.model.module.set_mem(backup_memory, backup_position)
+                    self.model.module.set_mem(backup_memory_dict_list)
             
             # Save At Training Epoch End
             if(self.main and self.is_training):

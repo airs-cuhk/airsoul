@@ -192,14 +192,14 @@ class CausalBlock(nn.Module):
     def get_mem(self):
         return self.layers.get_mem()
     
-    def set_mem(self, mem, position=None):
-        return self.layers.set_mem(mem, position=position)
+    def set_mem(self, mem_dict):
+        return self.layers.set_mem(mem_dict)
 
     def reset(self):
         if(self.need_reset):
             self.layers.reset()
 
-class DualTrackCausalBlock(nn.Module):
+class DualTrackCausalBlock(CausalBlock):
     def __init__(self, config):
         super().__init__()
 
@@ -240,10 +240,12 @@ class DualTrackCausalBlock(nn.Module):
     def get_mem(self):
         return self.layers.get_mem() # short_mem, long_mem, short_position, long_position
     
-    def set_mem(self, short_mem, long_mem, short_position=None, long_position=None):
-        return self.layers.set_mem(short_mem, long_mem, 
-                                   short_position=short_position, 
-                                   long_position=long_position)
+    def set_mem(self, memory_dict_list):
+        return self.layers.set_mem(memory_dict_list)
+    
     def reset(self, stateful_reset=True):
         if(self.need_reset):
             self.layers.reset(stateful_reset=stateful_reset)
+
+    def merge_merge(self):
+        self.layers.merge_memory()

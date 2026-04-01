@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from airsoul.utils import weighted_loss
-from airsoul.modules import CausalBlock, ResidualMLPDecoder, MLPEncoder
+from airsoul.modules import CausalBlock, DualTrackCausalBlock, ResidualMLPDecoder, MLPEncoder
 from airsoul.utils import parameters_regularization, count_parameters
 
 
@@ -35,8 +35,8 @@ class StatefulLM(nn.Module):
     def get_mem(self):
         return self.causal_model.get_mem()
     
-    def set_mem(self, mem, position=None):
-        self.causal_model.set_mem(mem, position=position)
+    def set_mem(self, mem_dict):
+        self.causal_model.set_mem(mem_dict)
 
     def reset(self):
         self.causal_model.reset()
@@ -87,6 +87,12 @@ class StatefulLM(nn.Module):
                         T = temp_default
         return outputs
 
+class DualTrackStatefulLM(StatefulLM):
+    def __init__(self, config, verbose):
+        super().__init__(config, verbose)
+        self.causal_model = DualTrackCausalBlock(config.causal_block)
+    def merge_memory(self):
+        self.causal_model.merge_memory()
 
 if __name__=="__main__":
     from airsoul.utils import Configure

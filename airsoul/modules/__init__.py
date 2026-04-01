@@ -9,7 +9,7 @@ from .rope_mha import RoPEMultiheadAttention
 from .recursion import SimpleLSTM, PRNN
 # from .mamba import MambaBlock
 from .blockrec_wrapper import BlockRecurrentWrapper, DualTrackBlockRecurrentWrapper
-from .causal_proxy import CausalBlock
+from .causal_proxy import CausalBlock, DualTrackCausalBlock
 from .gsa import GLABlock, GSABlock
 
 from .rwkv6 import RWKV6Layer
