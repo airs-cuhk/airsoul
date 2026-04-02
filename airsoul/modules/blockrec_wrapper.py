@@ -194,7 +194,7 @@ class DualTrackBlockRecurrentWrapper(nn.Module):
         short_memory_list = mem_dict['mem_dict_short']['memory']  # list of cache dict
         long_memory_list = mem_dict['mem_dict_long']['memory']    # list of cache dict
         
-        multi_blocks = self.wrapper_long
+        multi_blocks = self.wrapper_long.temporal_module
         layers = multi_blocks.layers
         num_layers = len(layers)
         merged_long_memory_list = []

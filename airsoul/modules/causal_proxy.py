@@ -212,7 +212,7 @@ class CausalBlock(nn.Module):
 
 class DualTrackCausalBlock(CausalBlock):
     def __init__(self, config):
-        super().__init__()
+        super().__init__(config)
 
         hidden_size = config.hidden_size
         
@@ -258,5 +258,5 @@ class DualTrackCausalBlock(CausalBlock):
         if(self.need_reset):
             self.layers.reset(stateful_reset=stateful_reset)
 
-    def merge_merge(self):
+    def merge_memory(self):
         self.layers.merge_memory()
