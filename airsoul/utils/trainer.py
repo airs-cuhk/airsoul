@@ -242,7 +242,7 @@ def EpochManager(cls):
             if not self.is_training:
                 if self.stateful_training:
                     backup_memory_dict_list = self.model.module.get_mem()
-                    if self.dual_truck:
+                    if self.dual_track:
                         self.model.module.reset(stateful_reset=False)
                     else:
                         self.model.module.reset()
@@ -255,7 +255,7 @@ def EpochManager(cls):
                 # Important: Must not reset the model before segment iteration, when Stateful training
                 if not self.stateful_training:
                     self.model.module.reset()
-                elif self.dual_truck:
+                elif self.dual_track:
                     self.model.module.reset(stateful_reset=True)
 
                 if(self.is_training):

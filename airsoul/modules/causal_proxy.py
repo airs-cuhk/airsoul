@@ -121,15 +121,26 @@ class CausalBlock(nn.Module):
                 num_heads=config.nhead
             )
         elif(self.model_type == "deltanet"):
-            main_encoder = MultiBlocks(
-                DualTrackGatedDeltaNet,
-                config.num_layers,
-                need_block_wrapper=False,
-                io_size=config.hidden_size,
-                intermediate_size=config.inner_hidden_size,
-                num_heads=config.nhead,
-                expand_v=config.expand_v
-            )
+            main_encoder = {
+                "short_term_encoder" : MultiBlocks(
+                    DualTrackGatedDeltaNet,
+                    config.num_layers,
+                    need_block_wrapper=False,
+                    io_size=config.hidden_size,
+                    intermediate_size=config.inner_hidden_size,
+                    num_heads=config.nhead,
+                    expand_v=config.expand_v,
+                    use_memory_merge=False),
+                "long_term_encoder" : MultiBlocks(
+                    DualTrackGatedDeltaNet,
+                    config.num_layers,
+                    need_block_wrapper=False,
+                    io_size=config.hidden_size,
+                    intermediate_size=config.inner_hidden_size,
+                    num_heads=config.nhead,
+                    expand_v=config.expand_v,
+                    use_memory_merge=True)
+            }
         elif(self.model_type == "dualtrack_gdn"):
             main_encoder = MultiBlocks(
                 GatedDeltaNet,

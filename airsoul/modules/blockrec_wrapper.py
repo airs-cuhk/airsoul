@@ -144,9 +144,9 @@ class DualTrackBlockRecurrentWrapper(nn.Module):
         self.temporal_module = temporal_module
         
         self.wrapper_short = BlockRecurrentWrapper(
-            temporal_module.short_term_encoder, memory_length_short, memory_type)
+            temporal_module["short_term_encoder"], memory_length_short, memory_type)
         self.wrapper_long = BlockRecurrentWrapper(
-            temporal_module.long_term_encoder, memory_length_long, memory_type)
+            temporal_module["long_term_encoder"], memory_length_long, memory_type)
 
     def forward(self, src, cache=None, need_cache=False, 
                 checkpoints_density=-1, update_memory=True):
@@ -194,7 +194,7 @@ class DualTrackBlockRecurrentWrapper(nn.Module):
         short_memory_list = mem_dict['mem_dict_short']['memory']  # list of cache dict
         long_memory_list = mem_dict['mem_dict_long']['memory']    # list of cache dict
         
-        multi_blocks = self.wrapper_long.temporal_module
+        multi_blocks = self.wrapper_long
         layers = multi_blocks.layers
         num_layers = len(layers)
         merged_long_memory_list = []
