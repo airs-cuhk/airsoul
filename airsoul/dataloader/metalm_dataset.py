@@ -43,7 +43,7 @@ class LMDataSet(Dataset):
             self.data_list = self.data_list[:len(self.data_list) - len(self.data_list) % ws]
             
         if(verbose):
-            print("...finished initializing data set, number of samples: %s\n" % len(self.index_inverse_list))
+            print("...finished initializing data set, number of samples: %s\n" % len(self.data_list))
 
     def __getitem__(self, index):
         path, sub_index = self.data_list[index]
