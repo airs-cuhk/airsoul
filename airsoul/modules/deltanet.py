@@ -55,7 +55,9 @@ class DualTrackGatedDeltaNet(GatedDeltaNet):
                 is_generate: bool=False,
                 use_memory_merge: bool=False,
                 fusion_gate_init_bias: float = -2.0,
-                use_adaptive_merge: bool = True):
+                use_adaptive_merge: bool = True,
+                short_term_config: dict = None,
+                long_term_config: dict = None,):
         super().__init__(io_size, 
                          intermediate_size, 
                          num_heads, 
@@ -66,6 +68,32 @@ class DualTrackGatedDeltaNet(GatedDeltaNet):
 
         if use_memory_merge:
             self._init_merge_layers(fusion_gate_init_bias, use_adaptive_merge)
+        
+        mode = 'chunk' if not is_generate else 'fused_recurrent'
+        short_cfg = short_term_config or {}
+        self.short_term_config = GatedDeltaNetConfig(
+            attn_mode=mode,
+            hidden_size=short_cfg.get('hidden_size', io_size),
+            intermediate_size=short_cfg.get('intermediate_size', intermediate_size),
+            num_heads=short_cfg.get('num_heads', num_heads),
+            head_dim=short_cfg.get('head_dim', int(0.75 * io_size // num_heads)),
+            vocab_size=32000,
+            expand_v=short_cfg.get('expand_v', expand_v),
+            conv_size=short_cfg.get('conv_size', 4)
+        )
+        
+        # Long-term encoder 配置
+        long_cfg = long_term_config or {}
+        self.long_term_config = GatedDeltaNetConfig(
+            attn_mode=mode,
+            hidden_size=long_cfg.get('hidden_size', io_size),
+            intermediate_size=long_cfg.get('intermediate_size', intermediate_size),
+            num_heads=long_cfg.get('num_heads', num_heads),
+            head_dim=long_cfg.get('head_dim', int(0.75 * io_size // num_heads)),
+            vocab_size=32000,
+            expand_v=long_cfg.get('expand_v', expand_v),
+            conv_size=long_cfg.get('conv_size', 4)
+        )
     
     def _init_merge_layers(self, fusion_gate_init_bias: float = -2.0, 
                             use_adaptive_merge: bool = True):
@@ -78,30 +106,27 @@ class DualTrackGatedDeltaNet(GatedDeltaNet):
                             False 则使用固定系数 0.1
         """
         self.use_adaptive_merge = use_adaptive_merge
-        self.k_proj = nn.Identity()
-        self.v_proj = nn.Identity()
-        self.v_proj_reverse = nn.Identity()
 
 
-        # # 维度信息
-        # self.head_v_dim_short = int(self.short_term_config.head_dim * self.short_term_config.expand_v)
-        # self.head_v_dim_long = int(self.long_term_config.head_dim * self.long_term_config.expand_v)
-        # self.head_k_dim_short = self.short_term_config.head_dim
-        # self.head_k_dim_long = self.long_term_config.head_dim
+        # 维度信息
+        self.head_v_dim_short = int(self.short_term_config.head_dim * self.short_term_config.expand_v)
+        self.head_v_dim_long = int(self.long_term_config.head_dim * self.long_term_config.expand_v)
+        self.head_k_dim_short = self.short_term_config.head_dim
+        self.head_k_dim_long = self.long_term_config.head_dim
         
-        # # 1. V 维度投影（如果不同）
-        # if self.head_v_dim_short != self.head_v_dim_long:
-        #     self.v_proj = nn.Linear(self.head_v_dim_short, self.head_v_dim_long, bias=False)
-        #     self.v_proj_reverse = nn.Linear(self.head_v_dim_long, self.head_v_dim_short, bias=False)
-        # else:
-        #     self.v_proj = nn.Identity()
-        #     self.v_proj_reverse = nn.Identity()
+        # 1. V 维度投影（如果不同）
+        if self.head_v_dim_short != self.head_v_dim_long:
+            self.v_proj = nn.Linear(self.head_v_dim_short, self.head_v_dim_long, bias=False)
+            self.v_proj_reverse = nn.Linear(self.head_v_dim_long, self.head_v_dim_short, bias=False)
+        else:
+            self.v_proj = nn.Identity()
+            self.v_proj_reverse = nn.Identity()
         
-        # # 2. K 维度投影（如果不同）
-        # if self.head_k_dim_short != self.head_k_dim_long:
-        #     self.k_proj = nn.Linear(self.head_k_dim_short, self.head_k_dim_long, bias=False)
-        # else:
-        #     self.k_proj = nn.Identity()
+        # 2. K 维度投影（如果不同）
+        if self.head_k_dim_short != self.head_k_dim_long:
+            self.k_proj = nn.Linear(self.head_k_dim_short, self.head_k_dim_long, bias=False)
+        else:
+            self.k_proj = nn.Identity()
         
         # 3. Gate MLP（输入：ST均值 + ST标准差 + LT均值投影）
         gate_input_dim = 3 * self.head_v_dim_short
