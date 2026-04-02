@@ -66,7 +66,7 @@ class DualTrackGatedDeltaNet(nn.Module):
                  short_term_config: dict = None,
                  long_term_config: dict = None,
                  use_memory_merge: bool = True,
-                 fusion_gate_init_bias: float = -0.2,
+                 fusion_gate_init_bias: float = -2.0,
                  use_adaptive_merge: bool = True,):
         super().__init__()
         
