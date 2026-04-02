@@ -242,7 +242,7 @@ def EpochManager(cls):
             if not self.is_training:
                 if self.stateful_training:
                     backup_memory_dict_list = self.model.module.get_mem()
-                    if self.dual_truck:
+                    if self.dual_track:
                         self.model.module.reset(stateful_reset=False)
                     else:
                         self.model.module.reset()
@@ -255,7 +255,8 @@ def EpochManager(cls):
                 # Important: Must not reset the model before segment iteration, when Stateful training
                 if not self.stateful_training:
                     self.model.module.reset()
-                elif self.dual_truck:
+                elif self.dual_track:
+                    print(f"Resetting model: {self.model.module.__class__.__name__} for dual track training")
                     self.model.module.reset(stateful_reset=True)
 
                 if(self.is_training):
@@ -460,6 +461,7 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
                                         main=main,
                                         is_training=True,
                                         stateful_training=config.stateful_training,
+                                        dual_track=config.dual_track,
                                         watch_dir=watch_dir,
                                         extra_info=extra_info,
                                         use_bf16=config.use_bf16 if config.has_attr("use_bf16") else False,
@@ -498,6 +500,7 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
             main=main,
             is_training=False,
             stateful_training=config.stateful_training,
+            dual_track=config.dual_track,
             extra_info=extra_info,
             use_bf16=config.use_bf16 if config.has_attr("use_bf16") else False,
             extra_states=extra_states,
