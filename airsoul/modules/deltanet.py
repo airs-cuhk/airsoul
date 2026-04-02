@@ -78,26 +78,30 @@ class DualTrackGatedDeltaNet(GatedDeltaNet):
                             False 则使用固定系数 0.1
         """
         self.use_adaptive_merge = use_adaptive_merge
+        self.k_proj = nn.Identity()
+        self.v_proj = nn.Identity()
+        self.v_proj_reverse = nn.Identity()
+
+
+        # # 维度信息
+        # self.head_v_dim_short = int(self.short_term_config.head_dim * self.short_term_config.expand_v)
+        # self.head_v_dim_long = int(self.long_term_config.head_dim * self.long_term_config.expand_v)
+        # self.head_k_dim_short = self.short_term_config.head_dim
+        # self.head_k_dim_long = self.long_term_config.head_dim
         
-        # 维度信息
-        self.head_v_dim_short = int(self.short_term_config.head_dim * self.short_term_config.expand_v)
-        self.head_v_dim_long = int(self.long_term_config.head_dim * self.long_term_config.expand_v)
-        self.head_k_dim_short = self.short_term_config.head_dim
-        self.head_k_dim_long = self.long_term_config.head_dim
+        # # 1. V 维度投影（如果不同）
+        # if self.head_v_dim_short != self.head_v_dim_long:
+        #     self.v_proj = nn.Linear(self.head_v_dim_short, self.head_v_dim_long, bias=False)
+        #     self.v_proj_reverse = nn.Linear(self.head_v_dim_long, self.head_v_dim_short, bias=False)
+        # else:
+        #     self.v_proj = nn.Identity()
+        #     self.v_proj_reverse = nn.Identity()
         
-        # 1. V 维度投影（如果不同）
-        if self.head_v_dim_short != self.head_v_dim_long:
-            self.v_proj = nn.Linear(self.head_v_dim_short, self.head_v_dim_long, bias=False)
-            self.v_proj_reverse = nn.Linear(self.head_v_dim_long, self.head_v_dim_short, bias=False)
-        else:
-            self.v_proj = nn.Identity()
-            self.v_proj_reverse = nn.Identity()
-        
-        # 2. K 维度投影（如果不同）
-        if self.head_k_dim_short != self.head_k_dim_long:
-            self.k_proj = nn.Linear(self.head_k_dim_short, self.head_k_dim_long, bias=False)
-        else:
-            self.k_proj = nn.Identity()
+        # # 2. K 维度投影（如果不同）
+        # if self.head_k_dim_short != self.head_k_dim_long:
+        #     self.k_proj = nn.Linear(self.head_k_dim_short, self.head_k_dim_long, bias=False)
+        # else:
+        #     self.k_proj = nn.Identity()
         
         # 3. Gate MLP（输入：ST均值 + ST标准差 + LT均值投影）
         gate_input_dim = 3 * self.head_v_dim_short

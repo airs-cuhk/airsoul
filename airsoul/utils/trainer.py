@@ -243,7 +243,6 @@ def EpochManager(cls):
                 if self.stateful_training:
                     backup_memory_dict_list = self.model.module.get_mem()
                     if self.dual_track:
-                    if self.dual_track:
                         self.model.module.reset(stateful_reset=False)
                     else:
                         self.model.module.reset()

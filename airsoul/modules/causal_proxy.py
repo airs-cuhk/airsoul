@@ -120,7 +120,7 @@ class CausalBlock(nn.Module):
                 intermediate_size=config.inner_hidden_size,
                 num_heads=config.nhead
             )
-        elif(self.model_type == "deltanet"):
+        elif(self.model_type == "dualtrack_gdn"):
             main_encoder = {
                 "short_term_encoder" : MultiBlocks(
                     DualTrackGatedDeltaNet,
@@ -141,7 +141,7 @@ class CausalBlock(nn.Module):
                     expand_v=config.expand_v,
                     use_memory_merge=True)
             }
-        elif(self.model_type == "dualtrack_gdn"):
+        elif(self.model_type == "deltanet"):
             main_encoder = MultiBlocks(
                 GatedDeltaNet,
                 config.num_layers,

@@ -164,7 +164,7 @@ class DualTrackBlockRecurrentWrapper(nn.Module):
         return out_short, out_long, new_cache_short, new_cache_long
     
     def get_o_list(self):
-        return self.temporal_module.get_o_list()
+        return self.wrapper_short.temporal_module.get_o_list(), self.wrapper_long.temporal_module.get_o_list()
 
     def get_mem(self):
         mem_dict_short= self.wrapper_short.get_mem()
