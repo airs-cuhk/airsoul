@@ -256,7 +256,7 @@ def EpochManager(cls):
                 if not self.stateful_training:
                     self.model.module.reset()
                 elif self.dual_track:
-                    print(f"Resetting model: {self.model.module.__class__.__name__} for dual track training")
+                    # print(f"Resetting model: {self.model.module.__class__.__name__} for dual track training")
                     self.model.module.reset(stateful_reset=True)
 
                 if(self.is_training):

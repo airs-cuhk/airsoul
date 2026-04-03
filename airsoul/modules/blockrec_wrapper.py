@@ -164,7 +164,7 @@ class DualTrackBlockRecurrentWrapper(nn.Module):
         return out_short, out_long, new_cache_short, new_cache_long
     
     def get_o_list(self):
-        return self.wrapper_short.temporal_module.get_o_list(), self.wrapper_long.temporal_module.get_o_list()
+        return self.temporal_module.get_o_list()
 
     def get_mem(self):
         mem_dict_short= self.wrapper_short.get_mem()
@@ -195,7 +195,7 @@ class DualTrackBlockRecurrentWrapper(nn.Module):
         long_memory_list = mem_dict['mem_dict_long']['memory']    # list of cache dict
         
         multi_blocks = self.wrapper_long
-        layers = multi_blocks.layers
+        layers = multi_blocks.temporal_module.layers
         num_layers = len(layers)
         merged_long_memory_list = []
         all_gate_stats = []
@@ -207,7 +207,7 @@ class DualTrackBlockRecurrentWrapper(nn.Module):
         for layer_idx in range(num_layers):
             # 每个 layer 是 BlockWrapper，其 temporal_encoder 是 DualTrackGatedDeltaNet
             layer = layers[layer_idx]
-            dual_track_attention_block_module = layer.temporal_encoder  # DualTrackGatedDeltaNet
+            dual_track_attention_block_module = layer  # DualTrackGatedDeltaNet
             
             short_cache = short_memory_list[layer_idx]
             long_cache = long_memory_list[layer_idx]

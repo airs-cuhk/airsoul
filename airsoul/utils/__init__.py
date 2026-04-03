@@ -5,7 +5,7 @@ from .stats import DistStatistics
 from .data_proc import rewards2go, img_pro, img_post, downsample, sa_dropout
 from .tools import safety_check, count_parameters,  format_cache, memory_cpy, check_model_validity, custom_load_model, apply_gradient_safely
 from .tools import Configure, Logger, log_warn, log_debug, log_progress, log_fatal
-from .tools import create_folder, import_with_caution, plotLongDemo
+from .tools import create_folder, import_with_caution
 from .trainer import EpochManager, Runner
 from .generator import GeneratorRunner, GeneratorBase
 from .generator_api import ModelLoader

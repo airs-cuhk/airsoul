@@ -93,6 +93,9 @@ class DualTrackStatefulLM(StatefulLM):
         self.causal_model = DualTrackCausalBlock(config.causal_block)
     def merge_memory(self):
         self.causal_model.merge_memory()
+    
+    def reset(self, stateful_reset: bool):
+        self.causal_model.reset(stateful_reset=stateful_reset)
 
 if __name__=="__main__":
     from airsoul.utils import Configure
