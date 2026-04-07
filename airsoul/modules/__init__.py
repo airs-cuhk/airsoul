@@ -11,8 +11,8 @@ from .recursion import SimpleLSTM, PRNN
 from .blockrec_wrapper import BlockRecurrentWrapper, DualTrackBlockRecurrentWrapper
 from .causal_proxy import CausalBlock, DualTrackCausalBlock
 from .gsa import GLABlock, GSABlock
-
 from .rwkv6 import RWKV6Layer
 from .rwkv7 import RWKV7Layer
 from .deltanet import GatedDeltaNet, DualTrackGatedDeltaNet
-
+from .kda import KDALayer, DualTrackKDA
+from .dual_track import DualTrackMixin
