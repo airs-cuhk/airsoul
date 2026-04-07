@@ -65,6 +65,7 @@ class DualTrackGatedDeltaNet(GatedDeltaNet):
                          layer_idx, 
                          is_generate)
         self.use_memory_merge = use_memory_merge
+
         
         mode = 'chunk' if not is_generate else 'fused_recurrent'
         short_cfg = short_term_config or {}
@@ -91,8 +92,7 @@ class DualTrackGatedDeltaNet(GatedDeltaNet):
             expand_v=long_cfg.get('expand_v', expand_v),
             conv_size=long_cfg.get('conv_size', 4)
         )
-
-        if use_memory_merge:
+        if self.use_memory_merge:
             self._init_merge_layers(fusion_gate_init_bias, use_adaptive_merge)
     
     def _init_merge_layers(self, fusion_gate_init_bias: float = -2.0, 

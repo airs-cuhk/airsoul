@@ -141,7 +141,8 @@ class CausalBlock(nn.Module):
                     expand_v=config.expand_v,
                     use_memory_merge=True)
             }
-        elif(self.model_type == "deltanet"):
+            dual_track = True
+        elif(self.model_type == "gdn"):
             main_encoder = MultiBlocks(
                 GatedDeltaNet,
                 config.num_layers,
@@ -151,7 +152,7 @@ class CausalBlock(nn.Module):
                 num_heads=config.nhead,
                 expand_v=config.expand_v
             )
-            dual_track = True
+            
         elif(self.model_type == "kda"):
             main_encoder = MultiBlocks(
                 KDALayer,
@@ -246,7 +247,7 @@ class DualTrackCausalBlock(CausalBlock):
         else:  # 'add'
             out = short_out + long_out
 
-        return self.layer_norm(out), cache_short, cache_long
+        return self.layer_norm(out), [cache_short, cache_long]
     
     def get_mem(self):
         return self.layers.get_mem() # short_mem, long_mem, short_position, long_position
