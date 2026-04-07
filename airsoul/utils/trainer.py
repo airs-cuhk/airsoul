@@ -239,15 +239,15 @@ def EpochManager(cls):
                 done = False
 
             # Backup memory for stateful training before validation.
-            if not self.is_training:
-                if self.stateful_training:
-                    backup_memory_dict_list = self.model.module.get_mem()
-                    if self.dual_track:
-                        self.model.module.reset(stateful_reset=False)
-                    else:
-                        self.model.module.reset()
-                else:
-                    self.model.module.reset()
+            # if not self.is_training:
+            #     if self.stateful_training:
+            #         backup_memory_dict_list = self.model.module.get_mem()
+            #         if self.dual_track:
+            #             self.model.module.reset(stateful_reset=False)
+            #         else:
+            #             self.model.module.reset()
+            #     else:
+            #         self.model.module.reset()
 
             for batch_id, batch_data in enumerate(self.dataloader):
                 acc_iter_log += 1
@@ -341,10 +341,10 @@ def EpochManager(cls):
 
             if self.is_training:
                 self.training_metainfo["epochs"] += 1
-            else:
-                # Restore memory after validation
-                if self.stateful_training:
-                    self.model.module.set_mem(backup_memory_dict_list)
+            # else:
+            #     # Restore memory after validation
+            #     if self.stateful_training:
+            #         self.model.module.set_mem(backup_memory_dict_list)
             
             # Save At Training Epoch End
             if(self.main and self.is_training):
@@ -487,24 +487,25 @@ def dist_process(rank, use_gpu, world_size, config, main_rank,
         log_config.from_dict(log_config_dict)
 
         # Create evalutaion objects.
-        evaluate_list.append(evaluate_objects[0](
-            run_name=f"{config.run_name}_{dataset['name']}",
-            model=model,
-            training_metainfo=dict(),
-            config=test_config,
-            log_config=log_config,
-            rank=rank,
-            world_size=world_size,
-            device_type=device_type,
-            device=device,
-            main=main,
-            is_training=False,
-            stateful_training=config.stateful_training,
-            dual_track=config.dual_track,
-            extra_info=extra_info,
-            use_bf16=config.use_bf16 if config.has_attr("use_bf16") else False,
-            extra_states=extra_states,
-        ))
+        if evaluate_objects:
+            evaluate_list.append(evaluate_objects[0](
+                run_name=f"{config.run_name}_{dataset['name']}",
+                model=model,
+                training_metainfo=dict(),
+                config=test_config,
+                log_config=log_config,
+                rank=rank,
+                world_size=world_size,
+                device_type=device_type,
+                device=device,
+                main=main,
+                is_training=False,
+                stateful_training=config.stateful_training,
+                dual_track=config.dual_track,
+                extra_info=extra_info,
+                use_bf16=config.use_bf16 if config.has_attr("use_bf16") else False,
+                extra_states=extra_states,
+            ))
 
     time_cost = time.time() - start_time
     print(f"Config time cost: ", time_cost)

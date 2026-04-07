@@ -207,7 +207,7 @@ def custom_load_model(model,
     if(not os.path.exists(state_dict_path)):
         log_fatal(f"State dict path {state_dict_path} does not exist, quit job...")
 
-    saved_metainfo = torch.load(state_dict_path, weights_only=False) 
+    saved_metainfo = torch.load(state_dict_path, weights_only=False, map_location='cpu') 
     metainfo = dict()
     extra_states = dict()
     print("---------------loading checkpoint from ", state_dict_path, "---------------")

@@ -113,7 +113,7 @@ class LMEpoch:
                         stat_res["train_cross_entropy"]["mean"],
                         stat_res["train_perplexity"]["mean"],
                         epoch=global_epoch_id,
-                        iteration=local_batch_id)
+                        iteration=global_batch_id)
         else:
             ce_loss = torch.cat([loss["ce_loss"] / loss["count"] for loss in losses], dim=1)
             perpl = torch.cat([torch.exp(loss["ce_loss"] / loss["count"]) for loss in losses], dim=1)
